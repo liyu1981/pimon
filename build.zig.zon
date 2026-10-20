@@ -1,0 +1,22 @@
+.{
+    .name = .pimon,
+    .version = "0.1.0",
+    .fingerprint = 0x71becc1fb2407d5a, // Changing this has security and trust implications.
+    .minimum_zig_version = "0.17.0",
+    .dependencies = .{
+        .dvui = .{
+            .url = "git+https://github.com/david-vanderson/dvui#f68fa8ae8b078a7df0bac21ac19ac57fca181958",
+            .hash = "dvui-0.6.0-dev-AQFJmac1BAESesukeXZhVyMJy-98QmL8EPI4Rdvdh6zr",
+        },
+        // Vendored SDL2 (2.32.10) with a Zig build that enables the KMSDRM
+        // video driver + OpenGL ES2 renderer, so the Pi console needs no X11.
+        .sdl2 = .{ .path = "vendor/sdl2" },
+    },
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "vendor",
+        "README.md",
+    },
+}
