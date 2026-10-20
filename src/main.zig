@@ -19,6 +19,7 @@ const dashboard = @import("dashboard");
 const SDLBackend = @import("sdl-backend");
 const c = SDLBackend.c;
 const touch_mod = @import("touch.zig");
+const layout_mod = @import("layout");
 
 var quit_requested = std.atomic.Value(bool).init(false);
 
@@ -87,12 +88,16 @@ pub fn main(init: std.process.Init) !void {
         .auto => {
             const sdl_touch = c.SDL_GetNumTouchDevices();
             if (sdl_touch > 0) {
-                std.log.info("touch: SDL reports {d} touch device(s)", .{sdl_touch});
+                std.log.info("touch: SDL reports {d} touch device(s); using SDL touch", .{sdl_touch});
             } else {
+                std.log.info("touch: SDL has no usable touch device (the Pi 7\" panel lacks ABS_MT_PRESSURE); falling back to evdev", .{});
                 touchdev = touch_mod.Touch.init(init.gpa, touchOptions(cfg));
                 touch_active = true;
             }
         },
+    }
+    if (touch_active and !touchdev.active()) {
+        std.log.warn("touch: no evdev touchscreen found -- check the 'input' group (or sudo), or pass --touch-device PATH", .{});
     }
     defer {
         if (touch_active) touchdev.deinit();
@@ -102,6 +107,19 @@ pub fn main(init: std.process.Init) !void {
 
     var state = dashboard.State{};
     state.sample();
+
+    // Optional `.layout.zon`-driven screen: layout structure lives in the file,
+    // this binary only owns the schema (see src/layout.zig).
+    var bindings: layout_mod.Bindings = .{};
+    defer bindings.deinit(init.gpa);
+    var layout: ?layout_mod.Layout = null;
+    defer if (layout) |*l| l.deinit();
+    if (cfg.layout_path) |path| {
+        var l = layout_mod.Layout.init(init.gpa, init.io, path);
+        l.load();
+        l.registerBindings(&bindings);
+        layout = l;
+    }
 
     var driver_buf: [32]u8 = @splat(0);
     var renderer_buf: [32]u8 = @splat(0);
@@ -133,8 +151,24 @@ pub fn main(init: std.process.Init) !void {
         if (state.shouldSample()) state.sample();
         state.updateFps();
 
-        const result = try dashboard.frame(&state, info);
+        const result: dvui.App.Result = if (layout) |*l|
+            try dashboard.layoutFrame(l, &bindings, &state)
+        else
+            try dashboard.frame(&state, info);
         if (result == .close) break;
+
+        // Act on an action dispatched by the layout file this frame.
+        if (bindings.takeAction()) |action| {
+            if (std.mem.eql(u8, action, "quit")) break;
+            if (std.mem.eql(u8, action, "reload_layout")) {
+                if (layout) |*l| {
+                    l.load();
+                    l.registerBindings(&bindings);
+                }
+            } else {
+                std.log.info("layout action: {s}", .{action});
+            }
+        }
 
         _ = try win.end(.{});
         frames += 1;
@@ -203,6 +237,7 @@ const Config = struct {
     height: f32 = 480,
     fps: f32 = 30,
     frames: u64 = 0,
+    layout_path: ?[]const u8 = null,
     dark: bool = true,
     fullscreen: bool = true,
     vsync: bool = true,
@@ -258,6 +293,8 @@ const Config = struct {
                 self.dark = false;
             } else if (std.mem.eql(u8, arg, "--dark")) {
                 self.dark = true;
+            } else if (std.mem.eql(u8, arg, "--layout")) {
+                self.layout_path = it.next() orelse die();
             } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
                 printUsage();
                 std.process.exit(0);
@@ -283,6 +320,7 @@ fn printUsage() void {
         \\  --size WxH          requested window size (KMSDRM uses the panel mode)
         \\  --fps N             target frames per second (default 30, 0 = vsync-driven)
         \\  --frames N          exit after N frames (0 = run until quit)
+        \\  --layout PATH       render a .layout.zon file instead of the dashboard
         \\  --video-driver S    SDL video driver (default kmsdrm; try x11 on a desktop)
         \\  --render-driver S   SDL render driver (default opengles2; try software)
         \\  --windowed          do not request fullscreen

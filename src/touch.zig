@@ -95,6 +95,10 @@ pub const Touch = struct {
     down: bool = false,
     pending_down: bool = false,
     pending_up: bool = false,
+    /// Current multitouch slot.  Only slot 0 (the first finger) drives events:
+    /// multi-touch panels emit `ABS_MT_TRACKING_ID = -1` for the *other* slots,
+    /// and honouring those would press-then-release a single tap in one frame.
+    mt_slot: i32 = 0,
     norm_x: f32 = 0.5,
     norm_y: f32 = 0.5,
     last_x: f32 = 0.5,
@@ -201,9 +205,11 @@ pub const Touch = struct {
                     self.moved = true;
                 },
                 ABS_MT_TRACKING_ID => {
-                    if (ev.value < 0) self.pending_up = true else self.pending_down = true;
+                    if (self.mt_slot == 0) {
+                        if (ev.value < 0) self.pending_up = true else self.pending_down = true;
+                    }
                 },
-                ABS_MT_SLOT => {},
+                ABS_MT_SLOT => self.mt_slot = ev.value,
                 else => {},
             },
             EV_KEY => {

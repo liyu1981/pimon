@@ -1,0 +1,69 @@
+// pimon layout markup — edit this file and hit "Reload layout" (or restart).
+//
+// Schema (see src/layout.zig):
+//   component : vbox | hbox | label | title | heading | button | checkbox
+//               | separator | spacer
+//   text      : display string (label/title/heading/button/checkbox)
+//   expand    : .none | .horizontal | .vertical | .both
+//   bind      : boolean state key (checkbox)
+//   action    : action name dispatched to the app (button)
+//   padding   : uniform padding in logical px (boxes)
+//   width     : minimum width in logical px (spacer / boxes)
+//   height    : minimum height in logical px (spacer / boxes)
+//   children  : nested array (vbox / hbox)
+//
+// You can rearrange, add, remove, retitle and rebind freely — none of that
+// needs a Zig recompile.
+
+.{
+    .component = .vbox,
+    .expand = .both,
+    .padding = 10,
+    .children = .{
+
+        .{ .component = .title, .text = "pimon — layout driven" },
+        .{ .component = .separator },
+
+        .{ .component = .heading, .text = "Toggles" },
+        .{
+            .component = .vbox,
+            .children = .{
+                .{
+                    .component = .hbox,
+                    .children = .{
+                        .{ .component = .checkbox, .bind = "settings.perf_mode", .text = " Performance mode" },
+                        .{ .component = .checkbox, .bind = "settings.verbose", .text = " Verbose logging" },
+                    },
+                },
+                .{
+                    .component = .hbox,
+                    .children = .{
+                        .{ .component = .checkbox, .bind = "settings.autostart", .text = " Autostart on boot" },
+                        .{ .component = .checkbox, .bind = "settings.dimmer", .text = " Screen dimmer" },
+                    },
+                },
+            },
+        },
+
+        .{ .component = .separator },
+
+        .{ .component = .heading, .text = "Actions" },
+        .{
+            .component = .hbox,
+            .padding = 4,
+            .children = .{
+                .{ .component = .button, .text = "Apply changes", .action = "save" },
+                .{ .component = .spacer, .width = 8 },
+                .{ .component = .button, .text = "Reload layout", .action = "reload_layout" },
+                .{ .component = .spacer, .width = 8 },
+                .{ .component = .button, .text = "Quit", .action = "quit" },
+            },
+        },
+
+        .{ .component = .separator },
+
+        .{ .component = .heading, .text = "Status" },
+        .{ .component = .label, .text = "Edit layouts/dashboard.layout.zon, then Reload." },
+        .{ .component = .label, .text = "Bindings above persist in app state." },
+    },
+}

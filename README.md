@@ -23,6 +23,8 @@ build.zig.zon        pinned DVUI dependency
 src/main.zig         SDL2/KMSDRM front-end (default)
 src/main_fb.zig      software /dev/fb0 front-end (-Dgui=fb)
 src/dashboard.zig    shared dashboard UI and /proc sampling
+src/layout.zig       layout engine: schema + ZON parser + DVUI interpreter
+layouts/*.layout.zon runtime-driven UI markup (edited without recompiling)
 src/backend.zig      DVUI backend: framebuffer + evdev (fb mode)
 src/fbdev.zig        /dev/fb0 ioctl + mmap, pixel packing (fb mode)
 src/soft_render.zig  CPU triangle rasterizer (fb mode)
@@ -176,6 +178,72 @@ Build-time flags ( Zig `build` options, not runtime flags):
 
 Keyboard controls (both backends): `Tab`/`Shift-Tab` move focus, `Enter`/`Space`
 activate, `Esc` or the Quit button exits.
+
+## Layout markup (`*.layout.zon`)
+
+The UI can be **driven by a `.layout.zon` file instead of hard-coded Zig**, so
+the widget tree lives in data and only the *schema* lives in code:
+
+```
+.layouts/dashboard.layout.zon   ← structure, text, order, bindings, actions
+src/layout.zig                  ← schema (Node/Component) + parser + renderer
+```
+
+```sh
+./zig-out/bin/pimon-fb --layout layouts/dashboard.layout.zon
+./zig-out/bin/pimon-sdl --layout layouts/dashboard.layout.zon
+```
+
+Edit the file and press **Reload layout** (or restart) — rearranging,
+adding/removing components, retitling and rebinding never needs a recompile.
+Only adding a brand-new *component kind* or *property* touches `src/layout.zig`.
+
+### Components
+
+| `component` | Renders |
+| --- | --- |
+| `.vbox` / `.hbox` | vertical / horizontal box (`children`) |
+| `.label` / `.title` / `.heading` | text at body / title / heading font |
+| `.button` | button; `action` dispatched to the app on press |
+| `.checkbox` | bound to a boolean via `bind` |
+| `.separator` | divider |
+| `.spacer` | fixed `width` / `height` gap |
+
+Common properties: `text`, `expand` (`.none`/`.horizontal`/`.vertical`/`.both`),
+`bind`, `action`, `padding`, `width`, `height`, `children`.
+
+```zig
+.{
+    .component = .hbox,
+    .children = .{
+        .{ .component = .checkbox, .bind = "settings.perf_mode", .text = " Performance mode" },
+        .{ .component = .button, .text = "Apply", .action = "save" },
+    },
+}
+```
+
+A whole file is one such `.{ ... }` object — see `layouts/dashboard.layout.zon`.
+
+### How it works
+
+* **Parsing** uses Zig's built-in `std.zon` with a recursive typed schema — no
+  third-party runtime ZON package. Unknown components fail loudly with the list
+  of valid ones:
+  ```
+  error: unexpected enum literal 'sparkle'
+  note: supported: 'vbox', 'hbox', 'label', 'title', 'heading', 'button', 'checkbox', 'separator', 'spacer'
+  ```
+* **Widget IDs**: DVUI derives ids from `@src()` + `Options.id_extra`. Each
+  component kind has one fixed call site inside the interpreter, so
+  same-kind siblings are disambiguated with `id_extra = <index within parent>`
+  (DVUI's documented loop pattern).
+* **Bindings**: every `bind` key in the tree is registered at load time so the
+  map never rehashes while DVUI holds a `*bool` mid-frame.
+* **Actions**: a pressed button sets the action; the main loop consumes it with
+  `Bindings.takeAction()`. Built-in: `quit`, `reload_layout`.
+* A load/parse failure is shown **in the UI** (red) and the app keeps running —
+  an always-present Quit/Reload bar means a broken file can never strand you,
+  even on a touchscreen with no keyboard.
 
 ## Touchscreen (official Raspberry Pi 7" panel)
 

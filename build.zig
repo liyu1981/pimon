@@ -10,18 +10,16 @@ pub fn build(b: *std.Build) void {
     const sdl_mode = b.option(SdlMode, "sdl2", "SDL2 for the sdl backend: zig (build from vendored source, default) or system (link the system libSDL2)") orelse .zig;
     const x11 = b.option(bool, "x11", "when building SDL2 from source, also enable the X11 video driver (desktop testing)") orelse false;
 
-    var backend_module: ?*std.Build.Module = null;
+    // Unit tests run against the *host* build only: the layout/schema parser
+    // (src/layout.zig, reachable from src/dashboard.zig) and the fb backend.
+    const test_step: ?*std.Build.Step = b.step("test", "Run unit tests");
 
     // The default build uses whatever target `-Dtarget` selects (so on the Pi
     // it is armv7), and installs under a backend-specific name so the SDL2 and
     // software versions can coexist.
     const exe = switch (gui) {
-        .sdl => buildSdl(b, target, optimize, sdl_mode, x11),
-        .fb => blk: {
-            const result = buildFb(b, target, optimize);
-            backend_module = result.backend;
-            break :blk result.exe;
-        },
+        .sdl => buildSdl(b, target, optimize, sdl_mode, x11, test_step),
+        .fb => buildFb(b, target, optimize, test_step).exe,
     };
     const suffix = if (gui == .sdl) "sdl" else "fb";
     b.getInstallStep().dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = b.fmt("pimon-{s}", .{suffix}) }).step);
@@ -31,13 +29,6 @@ pub fn build(b: *std.Build) void {
     run_cmd.addPassthruArgs();
     const run_step = b.step("run", "Run pimon");
     run_step.dependOn(&run_cmd.step);
-
-    if (backend_module) |mod| {
-        const unit_tests = b.addTest(.{ .root_module = mod });
-        const run_unit_tests = b.addRunArtifact(unit_tests);
-        const test_step = b.step("test", "Run unit tests");
-        test_step.dependOn(&run_unit_tests.step);
-    }
 
     // --- Raspberry Pi 2 (ARMv7) targets -----------------------------------
     //
@@ -59,11 +50,11 @@ pub fn build(b: *std.Build) void {
     });
 
     const sdl_step = b.step("pi2-sdl", "Pi 2 (ARMv7) SDL2 + KMSDRM/GLES2 build");
-    const sdl_exe = buildSdl(b, pi2_gnu, .ReleaseFast, sdl_mode, x11);
+    const sdl_exe = buildSdl(b, pi2_gnu, .ReleaseFast, sdl_mode, x11, null);
     sdl_step.dependOn(&b.addInstallArtifact(sdl_exe, .{ .dest_sub_path = "pimon-pi2-sdl" }).step);
 
     const fb_step = b.step("pi2-fb", "Pi 2 (ARMv7) software framebuffer build");
-    const fb_exe = buildFb(b, pi2_musl, .ReleaseFast).exe;
+    const fb_exe = buildFb(b, pi2_musl, .ReleaseFast, null).exe;
     fb_step.dependOn(&b.addInstallArtifact(fb_exe, .{ .dest_sub_path = "pimon-pi2-fb" }).step);
 
     const pi2_step = b.step("pi2", "Pi 2 (ARMv7): build both the SDL2 and software-framebuffer binaries");
@@ -77,7 +68,7 @@ pub fn build(b: *std.Build) void {
 /// the KMSDRM video driver and OpenGL ES2 renderer enabled, so it needs no
 /// system SDL2 and cross-compiles cleanly.  Pass `-Dsdl2=system` to link the
 /// host's libSDL2 instead.
-fn buildSdl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, sdl_mode: SdlMode, x11: bool) *std.Build.Step.Compile {
+fn buildSdl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, sdl_mode: SdlMode, x11: bool, test_step: ?*std.Build.Step) *std.Build.Step.Compile {
     // Ask DVUI for the plain `dvui` module (custom backend) plus its SDL2
     // backend source; we wire the backend module up to our own SDL2 below.
     const dvui_dep = dvui(b, target, optimize, .custom);
@@ -127,6 +118,9 @@ fn buildSdl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.built
         .optimize = optimize,
         .imports = &.{.{ .name = "dvui", .module = dvui_mod }},
     });
+    const layout_mod = makeLayoutModule(b, dvui_mod, target, optimize, test_step);
+    layout_mod.addImport("dvui", dvui_mod);
+    dashboard_mod.addImport("layout", layout_mod);
 
     return b.addExecutable(.{
         .name = "pimon",
@@ -138,6 +132,7 @@ fn buildSdl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.built
             .imports = &.{
                 .{ .name = "dvui", .module = dvui_mod },
                 .{ .name = "dashboard", .module = dashboard_mod },
+                .{ .name = "layout", .module = layout_mod },
                 .{ .name = "sdl-backend", .module = sdl_mod },
             },
         }),
@@ -146,7 +141,7 @@ fn buildSdl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.built
 
 const Fb = struct { exe: *std.Build.Step.Compile, backend: *std.Build.Module };
 
-fn buildFb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode) Fb {
+fn buildFb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, test_step: ?*std.Build.Step) Fb {
     const dvui_dep = dvui(b, target, optimize, .custom);
     const dvui_mod = dvui_dep.module("dvui");
 
@@ -166,6 +161,13 @@ fn buildFb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
         .imports = &.{.{ .name = "dvui", .module = dvui_mod }},
     });
 
+    const layout_mod = makeLayoutModule(b, dvui_mod, target, optimize, test_step);
+    dashboard_mod.addImport("layout", layout_mod);
+    if (test_step) |ts| {
+        const backend_tests = b.addTest(.{ .root_module = backend_mod });
+        ts.dependOn(&b.addRunArtifact(backend_tests).step);
+    }
+
     const exe = b.addExecutable(.{
         .name = "pimon",
         .root_module = b.createModule(.{
@@ -176,12 +178,36 @@ fn buildFb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
             .imports = &.{
                 .{ .name = "dvui", .module = dvui_mod },
                 .{ .name = "dashboard", .module = dashboard_mod },
+                .{ .name = "layout", .module = layout_mod },
                 .{ .name = "backend", .module = backend_mod },
             },
         }),
     });
 
     return .{ .exe = exe, .backend = backend_mod };
+}
+
+/// `layout.zig` is its own module so the mains and `dashboard.zig` can share
+/// it (Zig forbids one file in two modules).  Its `test` blocks (schema
+/// parsing, unknown-component rejection, bind registration) run here.
+fn makeLayoutModule(
+    b: *std.Build,
+    dvui_mod: *std.Build.Module,
+    target: std.Build.ResolvedTarget,
+    optimize: std.builtin.OptimizeMode,
+    test_step: ?*std.Build.Step,
+) *std.Build.Module {
+    const layout_mod = b.createModule(.{
+        .root_source_file = b.path("src/layout.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{.{ .name = "dvui", .module = dvui_mod }},
+    });
+    if (test_step) |ts| {
+        const t = b.addTest(.{ .root_module = layout_mod });
+        ts.dependOn(&b.addRunArtifact(t).step);
+    }
+    return layout_mod;
 }
 
 fn dvui(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, backend: anytype) *std.Build.Dependency {

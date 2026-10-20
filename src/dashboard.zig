@@ -4,6 +4,7 @@
 const std = @import("std");
 const posix = std.posix;
 const dvui = @import("dvui");
+const layout_mod = @import("layout");
 
 pub const Channel = struct { bits: u8 = 0, offset: u8 = 0 };
 
@@ -182,6 +183,60 @@ pub fn frame(state: *State, info: DisplayInfo) !dvui.App.Result {
             te.deinit();
 
             dvui.label(@src(), "Keybind hint: Tab/Shift-Tab focuses, Enter activates, Esc quits.", .{}, .{ .name = "hint" });
+        }
+    }
+
+    return .ok;
+}
+
+/// Render a `.layout.zon` driven screen instead of the built-in dashboard.
+///
+/// The widget tree comes entirely from the file; this only supplies the window
+/// chrome, an always-reachable Quit/Reload bar (so a broken or quit-less
+/// layout can never strand the app, e.g. on a touchscreen with no keyboard),
+/// and Escape-to-quit.
+pub fn layoutFrame(
+    layout: *layout_mod.Layout,
+    bindings: *layout_mod.Bindings,
+    state: *State,
+) !dvui.App.Result {
+    for (dvui.events()) |*e| {
+        if (e.evt == .key and e.evt.key.action == .down and e.evt.key.code == .escape) {
+            return .close;
+        }
+    }
+
+    var root = dvui.box(@src(), .{ .dir = .vertical }, .{
+        .expand = .both,
+        .background = true,
+        .style = .window,
+        .padding = dvui.Rect.all(8),
+        .name = "layout_root",
+    });
+    defer root.deinit();
+
+    if (layout.load_error) |msg| {
+        dvui.labelNoFmt(@src(), "layout error:", .{}, .{ .color_text = .{ .color = dvui.Color.red } });
+        dvui.labelNoFmt(@src(), msg, .{}, .{});
+        dvui.labelNoFmt(@src(), "Fix the .zon file, then press Reload layout.", .{}, .{});
+    } else if (layout.root != null) {
+        layout.render(bindings);
+    } else {
+        dvui.labelNoFmt(@src(), "(no layout loaded)", .{}, .{});
+    }
+
+    // Always-available control bar, independent of whatever the file declares.
+    _ = dvui.separator(@src(), .{ .expand = .horizontal });
+    {
+        var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .name = "layout_bar" });
+        defer bar.deinit();
+        dvui.labelNoFmt(@src(), "layout.zon screen", .{}, .{ .gravity_y = 0.5 });
+        dvui.label(@src(), "  {d:.1} fps", .{state.fps}, .{ .gravity_y = 0.5 });
+        if (dvui.button(@src(), "Reload", .{}, .{ .gravity_x = 1.0 })) {
+            bindings.action = "reload_layout";
+        }
+        if (dvui.button(@src(), "Quit", .{}, .{ .gravity_x = 1.0 })) {
+            return .close;
         }
     }
 

@@ -11,6 +11,7 @@ const posix = std.posix;
 const dvui = @import("dvui");
 const backend_mod = @import("backend");
 const dashboard = @import("dashboard");
+const layout_mod = @import("layout");
 
 const Backend = backend_mod.Backend;
 
@@ -67,6 +68,19 @@ pub fn main(init: std.process.Init) !void {
     var state = dashboard.State{};
     state.sample();
 
+    // Optional `.layout.zon`-driven screen: layout structure lives in the file,
+    // this binary only owns the schema (see src/layout.zig).
+    var bindings: layout_mod.Bindings = .{};
+    defer bindings.deinit(init.gpa);
+    var layout: ?layout_mod.Layout = null;
+    defer if (layout) |*l| l.deinit();
+    if (cfg.layout_path) |path| {
+        var l = layout_mod.Layout.init(init.gpa, init.io, path);
+        l.load();
+        l.registerBindings(&bindings);
+        layout = l;
+    }
+
     const info = dashboard.DisplayInfo{
         .width = backend.fb.width,
         .height = backend.fb.height,
@@ -102,8 +116,24 @@ pub fn main(init: std.process.Init) !void {
         if (state.shouldSample()) state.sample();
         state.updateFps();
 
-        const result = try dashboard.frame(&state, info);
+        const result: dvui.App.Result = if (layout) |*l|
+            try dashboard.layoutFrame(l, &bindings, &state)
+        else
+            try dashboard.frame(&state, info);
         if (result == .close) break;
+
+        // Act on an action dispatched by the layout file this frame.
+        if (bindings.takeAction()) |action| {
+            if (std.mem.eql(u8, action, "quit")) break;
+            if (std.mem.eql(u8, action, "reload_layout")) {
+                if (layout) |*l| {
+                    l.load();
+                    l.registerBindings(&bindings);
+                }
+            } else {
+                std.log.info("layout action: {s}", .{action});
+            }
+        }
 
         _ = try win.end(.{});
         frames += 1;
@@ -149,6 +179,7 @@ const Config = struct {
     fps: f32 = 30,
     frames: u64 = 0,
     dump: ?[]const u8 = null,
+    layout_path: ?[]const u8 = null,
     dark: bool = true,
     scale: f32 = 1.0,
     no_input: bool = false,
@@ -195,6 +226,8 @@ const Config = struct {
             } else if (std.mem.eql(u8, arg, "--clear")) {
                 const s = it.next() orelse die();
                 self.clear = std.fmt.parseInt(u32, s, 16) catch die();
+            } else if (std.mem.eql(u8, arg, "--layout")) {
+                self.layout_path = it.next() orelse die();
             } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
                 printUsage();
                 std.process.exit(0);
@@ -223,6 +256,7 @@ fn printUsage() void {
         \\  --fps N          target frames per second (default 30)
         \\  --frames N       exit after N frames (0 = run until quit)
         \\  --dump PATH      write the last frame to a PNG and exit
+        \\  --layout PATH    render a .layout.zon file instead of the dashboard
         \\  --scale F        content scale (default 1.0)
         \\  --light|--dark   colour scheme (default dark)
         \\  --clear RRGGBB   background colour
