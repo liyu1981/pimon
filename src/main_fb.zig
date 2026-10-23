@@ -12,6 +12,7 @@ const dvui = @import("dvui");
 const backend_mod = @import("backend");
 const dashboard = @import("dashboard");
 const layout_mod = @import("layout");
+const metrics = @import("metrics");
 
 const Backend = backend_mod.Backend;
 
@@ -65,8 +66,9 @@ pub fn main(init: std.process.Init) !void {
 
     installSignalHandlers();
 
-    var state = dashboard.State{};
-    state.sample();
+    var m = metrics.SystemMetrics{};
+    m.sample();
+    var controls: dashboard.Controls = .{};
 
     // Optional `.layout.zon`-driven screen: layout structure lives in the file,
     // this binary only owns the schema (see src/layout.zig).
@@ -112,14 +114,17 @@ pub fn main(init: std.process.Init) !void {
         try win.begin(nstime);
         backend.pollEvents(&win);
 
-        state.tick += 1;
-        if (state.shouldSample()) state.sample();
-        state.updateFps();
+        m.tick += 1;
+        if (m.shouldSample()) m.sample();
+        m.updateFrameStats();
+
+        // Publish live metrics for `.layout.zon` bindings (gauges/sparklines).
+        if (layout != null) dashboard.publishMetrics(init.gpa, &bindings, &m);
 
         const result: dvui.App.Result = if (layout) |*l|
-            try dashboard.layoutFrame(l, &bindings, &state)
+            try dashboard.layoutFrame(l, &bindings, &m)
         else
-            try dashboard.frame(&state, info);
+            try dashboard.frame(&m, &controls, info);
         if (result == .close) break;
 
         // Act on an action dispatched by the layout file this frame.

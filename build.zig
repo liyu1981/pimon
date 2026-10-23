@@ -112,15 +112,7 @@ fn buildSdl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.built
     // dvui's `dvui` module imports "backend"; point it at our SDL2 backend.
     dvui_mod.addImport("backend", sdl_mod);
 
-    const dashboard_mod = b.createModule(.{
-        .root_source_file = b.path("src/dashboard.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "dvui", .module = dvui_mod }},
-    });
-    const layout_mod = makeLayoutModule(b, dvui_mod, target, optimize, test_step);
-    layout_mod.addImport("dvui", dvui_mod);
-    dashboard_mod.addImport("layout", layout_mod);
+    const ui = makeUiModules(b, dvui_mod, target, optimize, test_step);
 
     return b.addExecutable(.{
         .name = "pimon",
@@ -131,8 +123,9 @@ fn buildSdl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.built
             .link_libc = true,
             .imports = &.{
                 .{ .name = "dvui", .module = dvui_mod },
-                .{ .name = "dashboard", .module = dashboard_mod },
-                .{ .name = "layout", .module = layout_mod },
+                .{ .name = "dashboard", .module = ui.dashboard },
+                .{ .name = "layout", .module = ui.layout },
+                .{ .name = "metrics", .module = ui.metrics },
                 .{ .name = "sdl-backend", .module = sdl_mod },
             },
         }),
@@ -154,19 +147,8 @@ fn buildFb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
     backend_mod.addImport("dvui", dvui_mod);
     dvui_mod.addImport("backend", backend_mod);
 
-    const dashboard_mod = b.createModule(.{
-        .root_source_file = b.path("src/dashboard.zig"),
-        .target = target,
-        .optimize = optimize,
-        .imports = &.{.{ .name = "dvui", .module = dvui_mod }},
-    });
-
-    const layout_mod = makeLayoutModule(b, dvui_mod, target, optimize, test_step);
-    dashboard_mod.addImport("layout", layout_mod);
-    if (test_step) |ts| {
-        const backend_tests = b.addTest(.{ .root_module = backend_mod });
-        ts.dependOn(&b.addRunArtifact(backend_tests).step);
-    }
+    const ui = makeUiModules(b, dvui_mod, target, optimize, test_step);
+    addTests(b, backend_mod, test_step);
 
     const exe = b.addExecutable(.{
         .name = "pimon",
@@ -177,8 +159,9 @@ fn buildFb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
             .link_libc = true,
             .imports = &.{
                 .{ .name = "dvui", .module = dvui_mod },
-                .{ .name = "dashboard", .module = dashboard_mod },
-                .{ .name = "layout", .module = layout_mod },
+                .{ .name = "dashboard", .module = ui.dashboard },
+                .{ .name = "layout", .module = ui.layout },
+                .{ .name = "metrics", .module = ui.metrics },
                 .{ .name = "backend", .module = backend_mod },
             },
         }),
@@ -187,27 +170,73 @@ fn buildFb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
     return .{ .exe = exe, .backend = backend_mod };
 }
 
-/// `layout.zig` is its own module so the mains and `dashboard.zig` can share
-/// it (Zig forbids one file in two modules).  Its `test` blocks (schema
-/// parsing, unknown-component rejection, bind registration) run here.
-fn makeLayoutModule(
+/// The shared UI modules.
+///
+/// Zig forbids one file from belonging to two modules, so anything used by
+/// both `dashboard.zig` and `layout.zig` — the reusable widgets, the metrics
+/// sampler and the markup engine — is built as its own module here.
+const UiModules = struct {
+    dashboard: *std.Build.Module,
+    layout: *std.Build.Module,
+    widgets: *std.Build.Module,
+    metrics: *std.Build.Module,
+};
+
+fn makeUiModules(
     b: *std.Build,
     dvui_mod: *std.Build.Module,
     target: std.Build.ResolvedTarget,
     optimize: std.builtin.OptimizeMode,
     test_step: ?*std.Build.Step,
-) *std.Build.Module {
-    const layout_mod = b.createModule(.{
-        .root_source_file = b.path("src/layout.zig"),
+) UiModules {
+    // Reusable drawing widgets: arc, gauge, sparkline, palette.
+    const widgets_mod = b.createModule(.{
+        .root_source_file = b.path("src/widgets.zig"),
         .target = target,
         .optimize = optimize,
         .imports = &.{.{ .name = "dvui", .module = dvui_mod }},
     });
-    if (test_step) |ts| {
-        const t = b.addTest(.{ .root_module = layout_mod });
-        ts.dependOn(&b.addRunArtifact(t).step);
-    }
-    return layout_mod;
+    addTests(b, widgets_mod, test_step);
+
+    // Host metrics sampled from /proc (pure std, no DVUI).
+    const metrics_mod = b.createModule(.{
+        .root_source_file = b.path("src/metrics.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addTests(b, metrics_mod, test_step);
+
+    // The .layout.zon markup engine (schema + parser + interpreter).
+    const layout_mod = b.createModule(.{
+        .root_source_file = b.path("src/layout.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "dvui", .module = dvui_mod },
+            .{ .name = "widgets", .module = widgets_mod },
+        },
+    });
+    addTests(b, layout_mod, test_step);
+
+    // The screens, composing all of the above.
+    const dashboard_mod = b.createModule(.{
+        .root_source_file = b.path("src/dashboard.zig"),
+        .target = target,
+        .optimize = optimize,
+        .imports = &.{
+            .{ .name = "dvui", .module = dvui_mod },
+            .{ .name = "widgets", .module = widgets_mod },
+            .{ .name = "layout", .module = layout_mod },
+            .{ .name = "metrics", .module = metrics_mod },
+        },
+    });
+
+    return .{ .dashboard = dashboard_mod, .layout = layout_mod, .widgets = widgets_mod, .metrics = metrics_mod };
+}
+
+fn addTests(b: *std.Build, mod: *std.Build.Module, test_step: ?*std.Build.Step) void {
+    const ts = test_step orelse return;
+    ts.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = mod })).step);
 }
 
 fn dvui(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builtin.OptimizeMode, backend: anytype) *std.Build.Dependency {

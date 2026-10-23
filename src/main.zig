@@ -20,6 +20,7 @@ const SDLBackend = @import("sdl-backend");
 const c = SDLBackend.c;
 const touch_mod = @import("touch.zig");
 const layout_mod = @import("layout");
+const metrics = @import("metrics");
 
 var quit_requested = std.atomic.Value(bool).init(false);
 
@@ -105,8 +106,9 @@ pub fn main(init: std.process.Init) !void {
 
     installSignalHandlers();
 
-    var state = dashboard.State{};
-    state.sample();
+    var m = metrics.SystemMetrics{};
+    m.sample();
+    var controls: dashboard.Controls = .{};
 
     // Optional `.layout.zon`-driven screen: layout structure lives in the file,
     // this binary only owns the schema (see src/layout.zig).
@@ -147,14 +149,17 @@ pub fn main(init: std.process.Init) !void {
         // Then feed our own evdev touchscreen reader, if it is in use.
         if (touch_active) touchdev.poll(&win);
 
-        state.tick += 1;
-        if (state.shouldSample()) state.sample();
-        state.updateFps();
+        m.tick += 1;
+        if (m.shouldSample()) m.sample();
+        m.updateFrameStats();
+
+        // Publish live metrics for `.layout.zon` bindings (gauges/sparklines).
+        if (layout != null) dashboard.publishMetrics(init.gpa, &bindings, &m);
 
         const result: dvui.App.Result = if (layout) |*l|
-            try dashboard.layoutFrame(l, &bindings, &state)
+            try dashboard.layoutFrame(l, &bindings, &m)
         else
-            try dashboard.frame(&state, info);
+            try dashboard.frame(&m, &controls, info);
         if (result == .close) break;
 
         // Act on an action dispatched by the layout file this frame.
@@ -204,10 +209,10 @@ fn setHint(name: [*:0]const u8, value: []const u8) void {
 fn displayInfo(backend: *SDLBackend, driver_buf: []u8, renderer_buf: []u8) dashboard.DisplayInfo {
     const ps = backend.pixelSize();
 
-    if (c.SDL_GetCurrentVideoDriver()) |p| dashboard.copyTrimmed(driver_buf, std.mem.sliceTo(p, 0));
+    if (c.SDL_GetCurrentVideoDriver()) |p| metrics.copyTrimmed(driver_buf, std.mem.sliceTo(p, 0));
     var rinfo: c.SDL_RendererInfo = undefined;
     if (c.SDL_GetRendererInfo(backend.renderer, &rinfo) == 0 and rinfo.name != null) {
-        dashboard.copyTrimmed(renderer_buf, std.mem.sliceTo(rinfo.name, 0));
+        metrics.copyTrimmed(renderer_buf, std.mem.sliceTo(rinfo.name, 0));
     }
 
     return .{

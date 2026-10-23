@@ -1,9 +1,12 @@
-//! Shared dashboard UI used by both the SDL2/KMSDRM and the software
-//! framebuffer front-ends.
+//! The screens shared by the SDL2/KMSDRM and software-framebuffer front-ends.
+//!
+//! This file is only *composition*: sampling lives in `metrics`, drawing
+//! primitives in `widgets`, and the markup engine in `layout`.
 
 const std = @import("std");
-const posix = std.posix;
 const dvui = @import("dvui");
+const metrics = @import("metrics");
+const widgets = @import("widgets");
 const layout_mod = @import("layout");
 
 pub const Channel = struct { bits: u8 = 0, offset: u8 = 0 };
@@ -18,89 +21,16 @@ pub const DisplayInfo = struct {
     driver: []const u8 = "",
 };
 
-pub const State = struct {
-    tick: u32 = 0,
-    checkbox: bool = true,
+/// Widget state owned by the built-in dashboard screen.  Everything measured
+/// from the system lives in `metrics.SystemMetrics`.
+pub const Controls = struct {
+    animate: bool = true,
     slider: f32 = 0.35,
-    progress: f32 = 0.0,
-    text_buf: [128]u8 = @splat(0),
-
-    hostname: [64]u8 = @splat(0),
-    kernel: [64]u8 = @splat(0),
-    load: [3]f32 = .{ 0, 0, 0 },
-    cpu_count: u32 = 0,
-    uptime_s: u64 = 0,
-    mem_total_kb: u64 = 0,
-    mem_avail_kb: u64 = 0,
-    temp_c: f32 = 0,
-    frame_count: u64 = 0,
-    fps: f32 = 0,
-    last_sample_ms: i128 = 0,
-    last_fps_ms: i128 = 0,
-    fps_frames: u32 = 0,
-
-    pub fn nowMs() i128 {
-        var ts: posix.timespec = undefined;
-        _ = std.os.linux.clock_gettime(std.os.linux.CLOCK.MONOTONIC, &ts);
-        return @as(i128, ts.sec) * 1000 + @divTrunc(@as(i128, ts.nsec), std.time.ns_per_ms);
-    }
-
-    pub fn shouldSample(self: *State) bool {
-        return nowMs() - self.last_sample_ms > 1000;
-    }
-
-    pub fn updateFps(self: *State) void {
-        self.frame_count += 1;
-        self.fps_frames += 1;
-        const now = nowMs();
-        if (now - self.last_fps_ms >= 1000) {
-            self.fps = @as(f32, @floatFromInt(self.fps_frames)) * 1000.0 / @as(f32, @floatFromInt(now - self.last_fps_ms));
-            self.fps_frames = 0;
-            self.last_fps_ms = now;
-        }
-        if (self.checkbox) {
-            self.progress += 0.01;
-            if (self.progress > 1.0) self.progress = 0.0;
-        }
-    }
-
-    pub fn sample(self: *State) void {
-        self.last_sample_ms = nowMs();
-
-        var buf: [2048]u8 = undefined;
-        if (readSmallFile("/proc/sys/kernel/hostname", &buf)) |data| copyTrimmed(&self.hostname, data);
-        if (readSmallFile("/proc/sys/kernel/osrelease", &buf)) |data| copyTrimmed(&self.kernel, data);
-        if (readSmallFile("/proc/loadavg", &buf)) |data| {
-            var toks = std.mem.tokenizeAny(u8, data, " \n");
-            for (&self.load) |*l| {
-                l.* = std.fmt.parseFloat(f32, toks.next() orelse break) catch 0;
-            }
-        }
-        if (readSmallFile("/proc/cpuinfo", &buf)) |data| {
-            var count: u32 = 0;
-            var it = std.mem.splitScalar(u8, data, '\n');
-            while (it.next()) |line| {
-                if (std.mem.startsWith(u8, line, "processor")) count += 1;
-            }
-            if (count > 0) self.cpu_count = count;
-        }
-        if (readSmallFile("/proc/uptime", &buf)) |data| {
-            if (std.mem.indexOfScalar(u8, data, ' ')) |sp| {
-                self.uptime_s = @intFromFloat(std.fmt.parseFloat(f64, data[0..sp]) catch 0);
-            }
-        }
-        if (readSmallFile("/proc/meminfo", &buf)) |data| {
-            self.mem_total_kb = findMeminfo(data, "MemTotal:") orelse self.mem_total_kb;
-            self.mem_avail_kb = findMeminfo(data, "MemAvailable:") orelse self.mem_avail_kb;
-        }
-        if (readSmallFile("/sys/class/thermal/thermal_zone0/temp", &buf)) |data| {
-            const milli = std.fmt.parseInt(i64, std.mem.trim(u8, data, " \n\r\t"), 10) catch 0;
-            self.temp_c = @as(f32, @floatFromInt(milli)) / 1000.0;
-        }
-    }
+    text: [128]u8 = @splat(0),
 };
 
-pub fn frame(state: *State, info: DisplayInfo) !dvui.App.Result {
+/// The built-in (code-driven) dashboard.
+pub fn frame(m: *metrics.SystemMetrics, c: *Controls, info: DisplayInfo) !dvui.App.Result {
     // Escape closes the app (the Quit button does the same).
     for (dvui.events()) |*e| {
         if (e.evt == .key and e.evt.key.action == .down and e.evt.key.code == .escape) {
@@ -121,7 +51,7 @@ pub fn frame(state: *State, info: DisplayInfo) !dvui.App.Result {
         var row = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .name = "titlebar" });
         defer row.deinit();
         dvui.label(@src(), "pimon", .{}, .{ .font = .theme(.title), .gravity_y = 0.5, .name = "title" });
-        dvui.label(@src(), "  {d:.1} fps", .{state.fps}, .{ .gravity_y = 0.5, .name = "fps" });
+        dvui.label(@src(), "  {d:.1} fps", .{m.fps}, .{ .gravity_y = 0.5, .name = "fps" });
         if (dvui.button(@src(), "Quit", .{}, .{ .gravity_x = 1.0, .name = "quit" })) {
             return .close;
         }
@@ -133,60 +63,119 @@ pub fn frame(state: *State, info: DisplayInfo) !dvui.App.Result {
         var cols = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .both, .name = "columns" });
         defer cols.deinit();
 
-        // Left: system information.
+        // Left: system information as text.
         {
             var info_box = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .vertical, .min_size_content = .{ .w = 300 }, .name = "info" });
             defer info_box.deinit();
 
             dvui.label(@src(), "System", .{}, .{ .font = .theme(.heading), .name = "system_hdr" });
-            dvui.label(@src(), "Host: {s}  ({d} CPUs)", .{ std.mem.sliceTo(&state.hostname, 0), state.cpu_count }, .{ .name = "host" });
-            dvui.label(@src(), "Kernel: {s}", .{std.mem.sliceTo(&state.kernel, 0)}, .{ .name = "kernel" });
+            dvui.label(@src(), "Host: {s}  ({d} CPUs)", .{ std.mem.sliceTo(&m.hostname, 0), m.cpu_count }, .{ .name = "host" });
+            dvui.label(@src(), "Kernel: {s}", .{std.mem.sliceTo(&m.kernel, 0)}, .{ .name = "kernel" });
             dvui.label(@src(), "Uptime: {d}h {d}m {d}s", .{
-                state.uptime_s / 3600,
-                (state.uptime_s % 3600) / 60,
-                state.uptime_s % 60,
+                m.uptime_s / 3600,
+                (m.uptime_s % 3600) / 60,
+                m.uptime_s % 60,
             }, .{ .name = "uptime" });
-            dvui.label(@src(), "Load: {d:.2}  {d:.2}  {d:.2}", .{ state.load[0], state.load[1], state.load[2] }, .{ .name = "load" });
-            dvui.label(@src(), "Memory: {d} / {d} MiB", .{
-                (state.mem_total_kb -| state.mem_avail_kb) / 1024,
-                state.mem_total_kb / 1024,
-            }, .{ .name = "memory" });
-            if (state.mem_total_kb > 0) {
-                const used = @as(f32, @floatFromInt(state.mem_total_kb -| state.mem_avail_kb)) /
-                    @as(f32, @floatFromInt(state.mem_total_kb));
-                dvui.progress(@src(), .{ .percent = used }, .{ .expand = .horizontal, .min_size_content = .{ .h = 10 }, .name = "mem_bar" });
-            }
-            dvui.label(@src(), "CPU temp: {d:.1} C", .{state.temp_c}, .{ .name = "temp" });
+            dvui.label(@src(), "Load: {d:.2}  {d:.2}  {d:.2}", .{ m.load[0], m.load[1], m.load[2] }, .{ .name = "load" });
             dvui.label(@src(), "Display: {d}x{d} {d}bpp {s}", .{ info.width, info.height, info.bpp, info.driver }, .{ .name = "display" });
             dvui.label(@src(), "Layout: {d}/{d}/{d} bits at {d}/{d}/{d}", .{
                 info.red.bits,   info.green.bits,   info.blue.bits,
                 info.red.offset, info.green.offset, info.blue.offset,
             }, .{ .name = "display_layout" });
-
-            dvui.progress(@src(), .{ .percent = state.progress }, .{ .expand = .horizontal, .min_size_content = .{ .h = 14 }, .name = "prog" });
         }
 
-        // Right: interactive widgets.
+        // Right: gauges, a sparkline, and the demo controls.
         {
-            var controls = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .name = "controls" });
-            defer controls.deinit();
+            var right = dvui.box(@src(), .{ .dir = .vertical }, .{ .expand = .both, .name = "right" });
+            defer right.deinit();
+
+            dvui.label(@src(), "Meters", .{}, .{ .font = .theme(.heading), .name = "meters_hdr" });
+            {
+                var row2 = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .name = "meters" });
+                defer row2.deinit();
+
+                const ncpu: f32 = @floatFromInt(@max(1, m.cpu_count));
+                widgets.gauge.cell(0, "LOAD %", .{
+                    .value = std.math.clamp(m.load[0] / ncpu * 100.0, 0, 100),
+                    .accent = widgets.palette.green,
+                }, "%", 150, 130, .{});
+
+                widgets.gauge.cell(1, "TEMP", .{
+                    .value = m.temp_c,
+                    .max = 80.0,
+                    .accent = widgets.palette.orange,
+                }, "°C", 150, 130, .{});
+
+                const used_kb: f32 = @floatFromInt(m.mem_total_kb -| m.mem_avail_kb);
+                const total_kb: f32 = @floatFromInt(m.mem_total_kb);
+                widgets.gauge.cell(2, "RAM %", .{
+                    .value = if (total_kb > 0) used_kb / total_kb * 100.0 else 0,
+                    .accent = widgets.palette.lime,
+                }, "%", 150, 130, .{});
+            }
+
+            dvui.labelNoFmt(@src(), "load history (48 s)", .{}, .{ .name = "hist_lbl" });
+            {
+                var spark = dvui.box(@src(), .{ .dir = .vertical }, .{
+                    .expand = .horizontal,
+                    .min_size_content = .{ .h = 48 },
+                    .background = false,
+                    .name = "spark",
+                });
+                defer spark.deinit();
+                widgets.sparkline.draw(spark.data().rectScale(), m.loadHistory(), widgets.sparkline.default_color);
+            }
+
+            _ = dvui.separator(@src(), .{ .expand = .horizontal });
 
             dvui.label(@src(), "Controls", .{}, .{ .font = .theme(.heading), .name = "controls_hdr" });
+            _ = dvui.checkbox(@src(), &c.animate, "Animate", .{ .name = "anim" });
 
-            _ = dvui.checkbox(@src(), &state.checkbox, "Animate progress bar", .{ .name = "anim" });
-
-            dvui.label(@src(), "Slider: {d:.0}%", .{state.slider * 100.0}, .{ .name = "slider_lbl" });
-            _ = dvui.slider(@src(), .{ .fraction = &state.slider }, .{ .expand = .horizontal, .min_size_content = .{ .h = 22 }, .name = "slider" });
+            dvui.label(@src(), "Slider: {d:.0}%", .{c.slider * 100.0}, .{ .name = "slider_lbl" });
+            _ = dvui.slider(@src(), .{ .fraction = &c.slider }, .{ .expand = .horizontal, .min_size_content = .{ .h = 22 }, .name = "slider" });
 
             dvui.label(@src(), "Text entry:", .{}, .{ .name = "te_lbl" });
-            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &state.text_buf } }, .{ .expand = .horizontal, .name = "text" });
+            var te = dvui.textEntry(@src(), .{ .text = .{ .buffer = &c.text } }, .{ .expand = .horizontal, .name = "text" });
             te.deinit();
 
-            dvui.label(@src(), "Keybind hint: Tab/Shift-Tab focuses, Enter activates, Esc quits.", .{}, .{ .name = "hint" });
+            dvui.label(@src(), "Tab/Shift-Tab focuses, Enter activates, Esc quits.", .{}, .{ .name = "hint" });
         }
     }
 
     return .ok;
+}
+
+/// Publish this frame's metrics so a `.layout.zon` file can bind to them.
+/// Well-known keys (all live scalars / series):
+///
+/// | key | meaning |
+/// | --- | --- |
+/// | `cpu.load_pct` | load average 1min as % of CPU count (0..100) |
+/// | `cpu.load1` / `cpu.load5` / `cpu.load15` | raw load averages |
+/// | `cpu.count` | logical CPU count |
+/// | `cpu.temp` | CPU temperature in °C |
+/// | `cpu.temp_max` | scale hint for the temp gauge (80 °C) |
+/// | `ram.used_mb` / `ram.total_mb` / `ram.used_pct` | memory usage |
+/// | `cpu.load_hist` | series: last 48 one-second load samples |
+pub fn publishMetrics(gpa: std.mem.Allocator, b: *layout_mod.Bindings, m: *metrics.SystemMetrics) void {
+    const ncpu: f32 = @floatFromInt(@max(1, m.cpu_count));
+    b.setFloat(gpa, "cpu.count", ncpu) catch {};
+    b.setFloat(gpa, "cpu.load1", m.load[0]) catch {};
+    b.setFloat(gpa, "cpu.load5", m.load[1]) catch {};
+    b.setFloat(gpa, "cpu.load15", m.load[2]) catch {};
+    b.setFloat(gpa, "cpu.load_pct", std.math.clamp(m.load[0] / ncpu * 100.0, 0, 100)) catch {};
+    b.setFloat(gpa, "cpu.temp", m.temp_c) catch {};
+    b.setFloat(gpa, "cpu.temp_max", 80.0) catch {};
+
+    const used_kb: f32 = @floatFromInt(m.mem_total_kb -| m.mem_avail_kb);
+    const total_kb: f32 = @floatFromInt(m.mem_total_kb);
+    b.setFloat(gpa, "ram.used_mb", used_kb / 1024.0) catch {};
+    b.setFloat(gpa, "ram.total_mb", total_kb / 1024.0) catch {};
+    b.setFloat(gpa, "ram.used_pct", if (total_kb > 0) used_kb / total_kb * 100.0 else 0) catch {};
+
+    if (m.loadHistory().len > 1) {
+        b.setSeries(gpa, "cpu.load_hist", m.loadHistory()) catch {};
+    }
 }
 
 /// Render a `.layout.zon` driven screen instead of the built-in dashboard.
@@ -198,7 +187,7 @@ pub fn frame(state: *State, info: DisplayInfo) !dvui.App.Result {
 pub fn layoutFrame(
     layout: *layout_mod.Layout,
     bindings: *layout_mod.Bindings,
-    state: *State,
+    m: *metrics.SystemMetrics,
 ) !dvui.App.Result {
     for (dvui.events()) |*e| {
         if (e.evt == .key and e.evt.key.action == .down and e.evt.key.code == .escape) {
@@ -231,7 +220,7 @@ pub fn layoutFrame(
         var bar = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal, .name = "layout_bar" });
         defer bar.deinit();
         dvui.labelNoFmt(@src(), "layout.zon screen", .{}, .{ .gravity_y = 0.5 });
-        dvui.label(@src(), "  {d:.1} fps", .{state.fps}, .{ .gravity_y = 0.5 });
+        dvui.label(@src(), "  {d:.1} fps", .{m.fps}, .{ .gravity_y = 0.5 });
         if (dvui.button(@src(), "Reload", .{}, .{ .gravity_x = 1.0 })) {
             bindings.action = "reload_layout";
         }
@@ -244,34 +233,8 @@ pub fn layoutFrame(
 }
 
 // ---------------------------------------------------------------------------
-// Small utilities shared by the front-ends
+// Utilities
 // ---------------------------------------------------------------------------
-
-pub fn copyTrimmed(dst: []u8, src: []const u8) void {
-    const trimmed = std.mem.trim(u8, src, " \t\n\r");
-    const n = @min(dst.len - 1, trimmed.len);
-    @memcpy(dst[0..n], trimmed[0..n]);
-    dst[n] = 0;
-}
-
-pub fn readSmallFile(path: []const u8, buf: []u8) ?[]const u8 {
-    const fd = posix.openat(posix.AT.FDCWD, path, .{ .ACCMODE = .RDONLY }, 0) catch return null;
-    defer _ = std.os.linux.close(fd);
-    const n = posix.read(fd, buf) catch return null;
-    return buf[0..n];
-}
-
-fn findMeminfo(data: []const u8, key: []const u8) ?u64 {
-    var it = std.mem.splitScalar(u8, data, '\n');
-    while (it.next()) |line| {
-        if (std.mem.startsWith(u8, line, key)) {
-            var nums = std.mem.tokenizeAny(u8, line[key.len..], " \tkB");
-            const first = nums.next() orelse return null;
-            return std.fmt.parseInt(u64, first, 10) catch null;
-        }
-    }
-    return null;
-}
 
 /// Write a 0xAARRGGBB buffer as PNG using dvui's bundled encoder.
 pub fn savePng(io: std.Io, gpa: std.mem.Allocator, pixels_argb: []const u32, w: u32, h: u32, path: []const u8) !void {

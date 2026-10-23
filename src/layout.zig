@@ -32,6 +32,7 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const widgets = @import("widgets");
 
 /// The components this engine knows how to render.  Adding a *new kind* means
 /// touching this enum and `renderNode`; rearranging, retitling, rebinding or
@@ -46,6 +47,11 @@ pub const Component = enum {
     checkbox,
     separator,
     spacer,
+    /// Radial arc meter: track + threshold markers + value arc, with the
+    /// value and unit centred in the arc.  Use `value` or `bind_value`.
+    gauge,
+    /// Small line chart of a series (`data`, or live `bind_data`).
+    sparkline,
 };
 
 /// One node of the layout tree.  Everything except `component` is optional, so
@@ -66,6 +72,29 @@ pub const Node = struct {
     /// Minimum size hints (useful for `spacer`).
     width: ?f32 = null,
     height: ?f32 = null,
+
+    // --- `gauge` -----------------------------------------------------------
+    /// Static value.  Ignored when `bind_value` is set.
+    value: ?f32 = null,
+    /// Full scale (default 100).  The value arc turns yellow near 78% and red
+    /// near 90%, matching the threshold markers drawn at the end of the sweep.
+    max: ?f32 = null,
+    /// Unit shown under the value, e.g. "%", "°C", "W".
+    unit: ?[]const u8 = null,
+    /// Live scalar key (see `Bindings.setFloat`); wins over `value`.
+    bind_value: ?[]const u8 = null,
+
+    // --- `sparkline` -------------------------------------------------------
+    /// Static series of samples.
+    data: ?[]const f32 = null,
+    /// Live series key (see `Bindings.setSeries`); wins over `data`.
+    bind_data: ?[]const u8 = null,
+
+    // --- both --------------------------------------------------------------
+    /// Accent colour: a name (green, lime, red, yellow, orange, cyan, blue,
+    /// white, gray) or hex "rrggbb" / "aarrggbb".
+    color: ?[]const u8 = null,
+
     /// Nested children (`vbox` / `hbox`).
     children: ?[]const Node = null,
 };
@@ -74,11 +103,36 @@ pub const Node = struct {
 /// frame.
 pub const Bindings = struct {
     bools: std.StringHashMapUnmanaged(bool) = .empty,
+    /// Live scalar values, published by the app each frame (`setFloat`).
+    floats: std.StringHashMapUnmanaged(f32) = .empty,
+    /// Live data series for sparklines (`setSeries`).  The app owns the
+    /// backing storage and must keep it stable between publish and render.
+    series: std.StringHashMapUnmanaged([]const f32) = .empty,
     action: ?[]const u8 = null,
 
     pub fn deinit(self: *Bindings, gpa: std.mem.Allocator) void {
         self.bools.deinit(gpa);
+        self.floats.deinit(gpa);
+        self.series.deinit(gpa);
         self.* = undefined;
+    }
+
+    // --- live scalars (gauge `bind_value`) --------------------------------
+    pub fn setFloat(self: *Bindings, gpa: std.mem.Allocator, key: []const u8, value: f32) !void {
+        _ = try self.floats.put(gpa, key, value);
+    }
+
+    pub fn getFloat(self: *const Bindings, key: []const u8) ?f32 {
+        return self.floats.get(key);
+    }
+
+    // --- live series (sparkline `bind_data`) ------------------------------
+    pub fn setSeries(self: *Bindings, gpa: std.mem.Allocator, key: []const u8, data: []const f32) !void {
+        _ = try self.series.put(gpa, key, data);
+    }
+
+    pub fn getSeries(self: *const Bindings, key: []const u8) ?[]const f32 {
+        return self.series.get(key);
     }
 
     /// Register a key up front (done for every `bind` in the tree at load time)
@@ -253,6 +307,28 @@ fn renderNode(node: *const Node, gpa: std.mem.Allocator, b: *Bindings, idx: usiz
             var box = dvui.box(@src(), .{}, opts);
             defer box.deinit();
         },
+        .gauge => {
+            const gauge_opts: widgets.gauge.Options = .{
+                .value = if (node.bind_value) |k| b.getFloat(k) orelse node.value orelse 0.0 else node.value orelse 0.0,
+                .max = node.max orelse 100.0,
+                .accent = widgets.palette.parse(node.color) orelse widgets.palette.green,
+            };
+            widgets.gauge.cell(idx, node.text orelse "", gauge_opts, node.unit orelse "", node.width orelse 180, node.height orelse 150, opts);
+        },
+        .sparkline => {
+            const series = if (node.bind_data) |k|
+                b.getSeries(k) orelse node.data
+            else
+                node.data;
+
+            var s = dvui.box(@src(), .{ .dir = .vertical }, opts.override(.{
+                .min_size_content = .{ .w = node.width orelse 180, .h = node.height orelse 56 },
+                .background = false,
+            }));
+            defer s.deinit();
+
+            widgets.sparkline.draw(s.data().rectScale(), series, widgets.palette.parse(node.color) orelse widgets.sparkline.default_color);
+        },
     }
 }
 
@@ -328,4 +404,55 @@ test "binds register once and stay addressable" {
     b.action = "save";
     try std.testing.expectEqualStrings("save", b.takeAction().?);
     try std.testing.expect(b.takeAction() == null);
+}
+
+test "gauge and sparkline schema" {
+    var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+    defer arena.deinit();
+
+    var diag: std.zon.parse.Diagnostics = undefined;
+    const root = try std.zon.parse.fromSlice(Node, .{
+        .gpa = arena.allocator(),
+        .arena = arena.allocator(),
+        .source =
+        \\.{
+        \\    .component = .hbox,
+        \\    .children = .{
+        \\        .{ .component = .gauge, .bind_value = "cpu.temp", .max = 80.0, .unit = "C", .color = "green" },
+        \\        .{ .component = .sparkline, .bind_data = "cpu.load_hist", .color = "cyan", .height = 48.0 },
+        \\        .{ .component = .gauge, .value = 22.4, .max = 100.0, .unit = "%" },
+        \\    },
+        \\}
+        ,
+        .diagnostics = &diag,
+    });
+
+    const kids = root.children.?;
+    try std.testing.expect(kids[0].component == .gauge);
+    try std.testing.expectEqualStrings("cpu.temp", kids[0].bind_value.?);
+    try std.testing.expectEqual(@as(f32, 80.0), kids[0].max.?);
+    try std.testing.expectEqualStrings("C", kids[0].unit.?);
+    try std.testing.expect(kids[1].component == .sparkline);
+    try std.testing.expectEqualStrings("cpu.load_hist", kids[1].bind_data.?);
+    try std.testing.expectEqual(@as(f32, 48.0), kids[1].height.?);
+    try std.testing.expect(kids[2].component == .gauge);
+    try std.testing.expect(kids[2].bind_value == null);
+    try std.testing.expectEqual(@as(f32, 22.4), kids[2].value.?);
+}
+
+test "float and series bindings" {
+    var b: Bindings = .{};
+    defer b.deinit(std.testing.allocator);
+
+    const gpa = std.testing.allocator;
+    try b.setFloat(gpa, "cpu.temp", 49.0);
+    try b.setFloat(gpa, "cpu.temp", 51.0); // overwrite
+    try std.testing.expectEqual(@as(f32, 51.0), b.getFloat("cpu.temp").?);
+    try std.testing.expect(b.getFloat("missing") == null);
+
+    const series = [_]f32{ 1, 2, 3 };
+    try b.setSeries(gpa, "cpu.load_hist", &series);
+    const got = b.getSeries("cpu.load_hist").?;
+    try std.testing.expectEqual(@as(usize, 3), got.len);
+    try std.testing.expectEqual(@as(f32, 2.0), got[1]);
 }

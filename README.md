@@ -22,8 +22,14 @@ build.zig            build logic + backend selection + Pi cross steps
 build.zig.zon        pinned DVUI dependency
 src/main.zig         SDL2/KMSDRM front-end (default)
 src/main_fb.zig      software /dev/fb0 front-end (-Dgui=fb)
-src/dashboard.zig    shared dashboard UI and /proc sampling
-src/layout.zig       layout engine: schema + ZON parser + DVUI interpreter
+src/dashboard.zig    screen composition (built-in + .layout.zon)
+src/layout.zig       .layout.zon engine: schema + ZON parser + interpreter
+src/metrics.zig      host metrics sampled from /proc (+ load history)
+src/widgets.zig      module root for the reusable drawing widgets
+src/widgets/arc.zig  Canvas-style arc() with round end caps
+src/widgets/gauge.zig     radial gauge (background arc + value arc)
+src/widgets/sparkline.zig line chart of a numeric series
+src/widgets/palette.zig   widget colours + name/hex parser
 layouts/*.layout.zon runtime-driven UI markup (edited without recompiling)
 src/backend.zig      DVUI backend: framebuffer + evdev (fb mode)
 src/fbdev.zig        /dev/fb0 ioctl + mmap, pixel packing (fb mode)
@@ -208,9 +214,109 @@ Only adding a brand-new *component kind* or *property* touches `src/layout.zig`.
 | `.checkbox` | bound to a boolean via `bind` |
 | `.separator` | divider |
 | `.spacer` | fixed `width` / `height` gap |
+| `.gauge` | radial arc meter (270° track + threshold markers + value arc) with the value and unit centred |
+| `.sparkline` | small line chart of a numeric series |
 
 Common properties: `text`, `expand` (`.none`/`.horizontal`/`.vertical`/`.both`),
-`bind`, `action`, `padding`, `width`, `height`, `children`.
+`bind`, `action`, `padding`, `width`, `height`, `color`, `children`.
+
+### `gauge`
+
+| property | meaning |
+| --- | --- |
+| `value` | static value |
+| `bind_value` | **live** scalar key (wins over `value`) |
+| `max` | full scale (default 100) |
+| `unit` | suffix under the value (`%`, `°C`, `W`) |
+| `color` | accent colour: `green`/`lime`/`red`/`yellow`/`orange`/`cyan`/`blue`/`white`/`gray`, or hex `rrggbb`/`aarrggbb` |
+| `text` | (not used — put a `.label`/`.heading` above the gauge for the card title) |
+
+The value arc turns **yellow near 78 %** and **red near 90 %** of `max`, matching
+the threshold markers drawn at the end of the sweep.
+
+### `sparkline`
+
+| property | meaning |
+| --- | --- |
+| `data` | static series: `.{ 3.0, 5.0, 2.0, ... }` |
+| `bind_data` | **live** series key (wins over `data`) |
+| `color` | accent colour (same names/hex as `gauge`) |
+
+### Live data keys
+
+The app publishes metrics from `/proc` each frame (`dashboard.publishLive`),
+so a layout can bind to them without any code change:
+
+| key | meaning |
+| --- | --- |
+| `cpu.load_pct` | 1-min load average as % of CPU count |
+| `cpu.load1` / `cpu.load5` / `cpu.load15` | raw load averages |
+| `cpu.count` | logical CPU count |
+| `cpu.temp` / `cpu.temp_max` | CPU temperature (°C) and its 80 °C scale hint |
+| `ram.used_mb` / `ram.total_mb` / `ram.used_pct` | memory usage |
+| `cpu.load_hist` | series: last 48 one-second load samples |
+
+```sh
+./zig-out/bin/pimon-fb --layout layouts/monitor.layout.zon   # gauges + sparklines
+./zig-out/bin/pimon-fb --layout layouts/dashboard.layout.zon # plain widgets
+```
+
+See `layouts/monitor.layout.zon` for a hardware-monitor screen that looks like a
+radial-gauge dashboard.
+
+### Reusable widgets (usable without the layout engine)
+
+The custom drawing lives in its own module so both screens and your own code
+can use it:
+
+| API | What it does |
+| --- | --- |
+| `widgets.arc.arc(x, y, r, a0, a1, anticlockwise, thickness, color)` | Canvas-style arc, stroked once |
+| `widgets.arc.arcWithCaps(...)` | the same, with round end caps |
+| `widgets.arc.disc(x, y, r, color)` | filled circle |
+| `widgets.gauge.cell(id_extra, title, opts, unit, w, h, opts)` | full gauge cell: title, ring, centred value + unit |
+| `widgets.gauge.drawRing(rs, opts)` | just the ring, into a `RectScale` |
+| `widgets.sparkline.draw(rs, series, color)` | line chart into a `RectScale` |
+| `widgets.palette.parse("green" \| "ff8000")` | colour from a name or hex |
+
+The gauge is built exactly as described: **draw the background arc first, then
+lay the coloured value arc on top** — `arc.arcWithCaps` gives both round ends,
+which is what makes a thick progress ring look finished.  The arc itself is a
+port of a Canvas `arc()` re-implementation, normalised to a single turn and
+subdivided to about one segment per two pixels.
+
+### Adding your own custom component
+
+That is exactly what `gauge` and `sparkline` are — three edits in one file
+(`src/layout.zig`), then usable from any `.layout.zon`:
+
+1. **Name it** — add a variant to `Component`:
+   ```zig
+   pub const Component = enum { vbox, hbox, label, ..., gauge, sparkline, battery };
+   ```
+2. **Give it properties** — add optional fields to `Node` (anything absent in
+   the `.zon` stays `null`):
+   ```zig
+   /// Battery percentage, 0..100 (battery).
+   level: ?f32 = null,
+   bind_level: ?[]const u8 = null,
+   ```
+3. **Render it** — add a case in `renderNode`, using the per-component `opts`
+   (which already carries `id_extra = <index within parent>`, so sibling
+   instances of your component get distinct DVUI ids). Use
+   `dvui.currentWindow().arena()` for any temporary path buffers:
+   ```zig
+   .battery => {
+       const level = if (node.bind_level) |k| b.getFloat(k) orelse node.level orelse 0 else node.level orelse 0;
+       var box = dvui.box(@src(), .{}, opts.override(.{ .min_size_content = .{ .w = 120, .h = 24 } }));
+       defer box.deinit();
+       // ... draw using box.data().rectScale() ...
+   },
+   ```
+4. Optionally add a schema test next to the existing ones.
+
+No recompile of the layout is needed for anything you *don't* change here —
+rearranging, retitling, rebinding and reordering are all data-only edits.
 
 ```zig
 .{
