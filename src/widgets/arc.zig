@@ -58,8 +58,25 @@ pub fn addArcPoints(
     }
 }
 
-/// Stroke a Canvas-style arc with square end caps (the only caps DVUI strokes
-/// provide — use `arcWithCaps` for round ends).
+fn strokeArc(
+    center_x: f32,
+    center_y: f32,
+    radius: f32,
+    start_angle: f32,
+    end_angle: f32,
+    anticlockwise: bool,
+    thickness: f32,
+    color: dvui.Color,
+    endcap_style: dvui.Path.StrokeOptions.EndCapStyle,
+) void {
+    var b: dvui.Path.Builder = .init(dvui.currentWindow().arena());
+    addArcPoints(&b, center_x, center_y, radius, start_angle, end_angle, anticlockwise);
+    if (b.points.items.len < 2) return;
+    b.build().stroke(.{ .thickness = thickness, .color = .{ .color = color }, .endcap_style = endcap_style });
+}
+
+/// Stroke a Canvas-style arc with square end caps (use `arcWithCaps` for round
+/// ends).
 pub fn arc(
     center_x: f32,
     center_y: f32,
@@ -70,10 +87,7 @@ pub fn arc(
     thickness: f32,
     color: dvui.Color,
 ) void {
-    var b: dvui.Path.Builder = .init(dvui.currentWindow().arena());
-    addArcPoints(&b, center_x, center_y, radius, start_angle, end_angle, anticlockwise);
-    if (b.points.items.len < 2) return;
-    b.build().stroke(.{ .thickness = thickness, .color = .{ .color = color }, .endcap_style = .square });
+    strokeArc(center_x, center_y, radius, start_angle, end_angle, anticlockwise, thickness, color, .square);
 }
 
 /// Stroke a Canvas-style arc and round off both ends with a filled disc, which
@@ -90,7 +104,11 @@ pub fn arcWithCaps(
     var diff = end_angle - start_angle;
     if (diff < 0) diff += tau;
 
-    arc(center_x, center_y, radius, start_angle, end_angle, false, thickness, color);
+    // Stroke flat (`.none`) and let the discs below provide the round ends.
+    // DVUI's `.square` cap pushes each endpoint out by a *whole* thickness
+    // along the tangent, which pokes past the disc and turns short arcs into
+    // the blocky rectangles this is meant to avoid.
+    strokeArc(center_x, center_y, radius, start_angle, end_angle, false, thickness, color, .none);
 
     const half = thickness * 0.5;
     disc(center_x + @cos(start_angle) * radius, center_y + @sin(start_angle) * radius, half, color);

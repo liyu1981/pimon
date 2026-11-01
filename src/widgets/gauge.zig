@@ -69,20 +69,17 @@ pub fn drawRing(rs: dvui.RectScale, o: Options) void {
     // 1. background arc ...
     arc.arcWithCaps(cx, cy, radius, start, start + sweep, thickness, o.track);
 
-    // 2. threshold markers ...
-    if (o.show_thresholds and o.yellow_at < 1.0) {
-        arc.arc(
-            cx,
-            cy,
-            radius,
-            start + sweep * @max(o.yellow_at, 0.0),
-            start + sweep * std.math.clamp(o.red_at, 0.0, 1.0),
-            false,
-            thickness,
-            palette.yellow,
-        );
-        if (o.red_at < 1.0) {
-            arc.arc(cx, cy, radius, start + sweep * std.math.clamp(o.red_at, 0.0, 1.0), start + sweep, false, thickness, palette.red);
+    // 2. threshold zones, layered on the same centre/radius/thickness as the
+    //    track.  Use the round-capped ring primitive so the short bands read
+    //    as arcs instead of square blocks, and keep them under the value arc.
+    if (o.show_thresholds) {
+        const yellow_at = std.math.clamp(o.yellow_at, 0.0, 1.0);
+        const red_at = std.math.clamp(o.red_at, 0.0, 1.0);
+        if (yellow_at < red_at) {
+            arc.arcWithCaps(cx, cy, radius, start + sweep * yellow_at, start + sweep * red_at, thickness, palette.yellow);
+        }
+        if (red_at < 1.0) {
+            arc.arcWithCaps(cx, cy, radius, start + sweep * red_at, start + sweep, thickness, palette.red);
         }
     }
 
