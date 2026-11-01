@@ -8,7 +8,7 @@
 .{
     .component = .vbox,
     .expand = .horizontal,
-    .padding = 8,
+    .padding = 6,
     .children = .{
 
         .{ .component = .title, .text = "win11-monitor" },
@@ -19,16 +19,16 @@
             .component = .hbox,
             .expand = .horizontal,
             .children = .{
-                .{ .component = .gauge, .text = "CPU UTIL", .bind_value = "win.cpu.util_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "cyan", .width = 180.0, .height = 95.0 },
-                .{ .component = .gauge, .text = "CPU QUEUE", .bind_value = "win.cpu.queue", .bind_type = .float, .max = 8.0, .unit = "queue", .color = "green", .width = 180.0, .height = 95.0 },
-                .{ .component = .gauge, .text = "RAM USED", .bind_value = "win.ram.used_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "lime", .width = 180.0, .height = 95.0 },
-                .{ .component = .gauge, .text = "GPU UTIL", .bind_value = "win.gpu.util_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "orange", .width = 180.0, .height = 95.0 },
+                .{ .component = .gauge, .text = "CPU UTIL", .bind_value = "win.cpu.util_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "cyan", .width = 180.0, .height = 84.0 },
+                .{ .component = .gauge, .text = "CPU QUEUE", .bind_value = "win.cpu.queue", .bind_type = .float, .max = 8.0, .unit = "queue", .color = "green", .width = 180.0, .height = 84.0 },
+                .{ .component = .gauge, .text = "RAM USED", .bind_value = "win.ram.used_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "lime", .width = 180.0, .height = 84.0 },
+                .{ .component = .gauge, .text = "GPU UTIL", .bind_value = "win.gpu.util_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "orange", .width = 180.0, .height = 84.0 },
             },
         },
 
         .{ .component = .separator },
 
-        // ---- history + secondary gauges ---------------------------------
+        // ---- history | secondary gauges + Windows clock -----------------
         .{
             .component = .hbox,
             .expand = .horizontal,
@@ -39,18 +39,44 @@
                     .children = .{
                         .{ .component = .heading, .text = "HISTORY" },
                         .{ .component = .label, .text = "CPU %" },
-                        .{ .component = .sparkline, .bind_data = "win.cpu.util_hist", .bind_type = .series, .color = "cyan", .height = 38.0, .width = 260.0 },
+                        .{ .component = .sparkline, .bind_data = "win.cpu.util_hist", .bind_type = .series, .color = "cyan", .height = 24.0, .width = 260.0 },
                         .{ .component = .label, .text = "GPU %" },
-                        .{ .component = .sparkline, .bind_data = "win.gpu.util_hist", .bind_type = .series, .color = "orange", .height = 38.0, .width = 260.0 },
+                        .{ .component = .sparkline, .bind_data = "win.gpu.util_hist", .bind_type = .series, .color = "orange", .height = 24.0, .width = 260.0 },
                     },
                 },
+                .{ .component = .separator, .expand = .vertical },
                 .{
-                    .component = .hbox,
+                    .component = .vbox,
                     .children = .{
-                        .{ .component = .gauge, .text = "GPU VRAM", .bind_value = "win.gpu.mem_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "orange", .width = 125.0, .height = 80.0 },
-                        .{ .component = .gauge, .text = "GPU TEMP", .bind_value = "win.gpu.temp_c", .bind_type = .float, .max = 100.0, .unit = "°C", .color = "red", .width = 125.0, .height = 80.0 },
-                        .{ .component = .gauge, .text = "DOWN", .bind_value = "win.net.rx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "green", .width = 125.0, .height = 80.0 },
-                        .{ .component = .gauge, .text = "UP", .bind_value = "win.net.tx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "blue", .width = 125.0, .height = 80.0 },
+                        .{
+                            .component = .hbox,
+                            .children = .{
+                                .{ .component = .gauge, .text = "GPU VRAM", .bind_value = "win.gpu.mem_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "orange", .width = 125.0, .height = 70.0 },
+                                .{ .component = .gauge, .text = "GPU TEMP", .bind_value = "win.gpu.temp_c", .bind_type = .float, .max = 100.0, .unit = "°C", .color = "red", .width = 125.0, .height = 70.0 },
+                                .{ .component = .gauge, .text = "NET DOWN", .bind_value = "win.net.rx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "green", .width = 125.0, .height = 70.0 },
+                                .{ .component = .gauge, .text = "NET UP", .bind_value = "win.net.tx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "blue", .width = 125.0, .height = 70.0 },
+                            },
+                        },
+                        .{ .component = .heading, .text = "Windows Time", .color = "gray" },
+                        .{
+                            .component = .hbox,
+                            .expand = .horizontal,
+                            .children = .{
+                                .{ .component = .title, .bind_text = "win.sys.updated.weekday", .bind_type = .text, .color = "gray", .text_larger = 8.0 },
+                                .{ .component = .spacer, .width = 10 },
+                                .{ .component = .title, .bind_text = "win.sys.updated.year", .bind_type = .text, .color = "cyan", .text_larger = 8.0 },
+                                .{ .component = .title, .text = "-", .color = "gray", .text_larger = 8.0 },
+                                .{ .component = .title, .bind_text = "win.sys.updated.month", .bind_type = .text, .color = "blue", .text_larger = 8.0 },
+                                .{ .component = .title, .text = "-", .color = "gray", .text_larger = 8.0 },
+                                .{ .component = .title, .bind_text = "win.sys.updated.day", .bind_type = .text, .color = "lime", .text_larger = 8.0 },
+                                .{ .component = .spacer, .width = 10 },
+                                .{ .component = .title, .bind_text = "win.sys.updated.hour", .bind_type = .text, .color = "yellow", .text_larger = 8.0 },
+                                .{ .component = .title, .text = ":", .color = "gray", .text_larger = 8.0 },
+                                .{ .component = .title, .bind_text = "win.sys.updated.minute", .bind_type = .text, .color = "orange", .text_larger = 8.0 },
+                                .{ .component = .title, .text = ":", .color = "gray", .text_larger = 8.0 },
+                                .{ .component = .title, .bind_text = "win.sys.updated.second", .bind_type = .text, .color = "red", .text_larger = 8.0 },
+                            },
+                        },
                     },
                 },
             },

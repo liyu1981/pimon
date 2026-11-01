@@ -11,6 +11,9 @@ pub const Entry = struct {
 pub const PostError = error{
     InvalidUrl,
     HttpStatus,
+    ConnectFailed,
+    WriteFailed,
+    ReadFailed,
     OutOfMemory,
 };
 
@@ -75,14 +78,17 @@ pub fn postBatch(
 
     var req = client.request(.POST, uri, .{
         .extra_headers = &headers,
-        .keep_alive = true,
-    }) catch return error.HttpStatus;
+        // A fresh connection per sample: after Windows sleep/hibernate a
+        // pooled keep-alive socket is often dead, which shows up as a
+        // confusing HTTP failure.  One TCP handshake per second is cheap.
+        .keep_alive = false,
+    }) catch return error.ConnectFailed;
     defer req.deinit();
 
-    req.sendBodyComplete(payload) catch return error.HttpStatus;
+    req.sendBodyComplete(payload) catch return error.WriteFailed;
 
     var redirect_buf: [8192]u8 = undefined;
-    var response = req.receiveHead(&redirect_buf) catch return error.HttpStatus;
+    var response = req.receiveHead(&redirect_buf) catch return error.ReadFailed;
 
     var read_buf: [4096]u8 = undefined;
     const body = response.reader(&read_buf).allocRemaining(gpa, .limited(64 * 1024)) catch &.{};

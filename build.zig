@@ -101,12 +101,15 @@ fn buildWin11Agent(b: *std.Build, test_step: ?*std.Build.Step, optimize: std.bui
     agent_mod.linkSystemLibrary("ole32", .{});
     agent_mod.linkSystemLibrary("ntdll", .{});
     agent_mod.linkSystemLibrary("advapi32", .{});
+    agent_mod.linkSystemLibrary("shell32", .{});
+    agent_mod.linkSystemLibrary("user32", .{});
+    agent_mod.linkSystemLibrary("gdi32", .{});
 
     const exe = b.addExecutable(.{
         .name = "pimon-agent-win11",
         .root_module = agent_mod,
     });
-    exe.subsystem = .console;
+    exe.subsystem = .windows;
 
     const step = b.step("win", "Windows 11 agent (x86_64-windows-gnu)");
     step.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "pimon-agent-win11.exe" }).step);

@@ -97,6 +97,39 @@ pub fn resolvePath(
     return std.fmt.bufPrint(buf, "{s}\\pimon\\agent.config", .{appdata}) catch error.PathTooLong;
 }
 
+/// Read the raw config text for the UI editor.  Returns null when missing.
+pub fn readRaw(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !?[]u8 {
+    const text = std.Io.Dir.cwd().readFileAllocOptions(
+        io,
+        path,
+        gpa,
+        .limited(64 * 1024),
+        .@"1",
+        0,
+    ) catch |err| switch (err) {
+        error.FileNotFound => return null,
+        else => return err,
+    };
+    return text;
+}
+
+/// Save text to the config path, creating parent directories as needed.
+pub fn saveText(io: std.Io, path: []const u8, text: []const u8) !void {
+    const existed = openFileExists(io, path);
+    var atomic = try std.Io.Dir.cwd().createFileAtomic(io, path, .{
+        .permissions = .default_file,
+        .make_path = true,
+        .replace = existed,
+    });
+    defer atomic.deinit(io);
+    try atomic.file.writeStreamingAll(io, text);
+    if (existed) {
+        try atomic.replace(io);
+    } else {
+        try atomic.link(io);
+    }
+}
+
 /// Create the config file with the template if it does not exist.  Never
 /// overwrites an existing file.
 pub fn installTemplate(io: std.Io, path: []const u8) !InstallResult {

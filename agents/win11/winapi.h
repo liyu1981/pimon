@@ -11,3 +11,4 @@
 #include <pdh.h>
 #include <dxgi1_4.h>
 #include <iphlpapi.h>
+#include <shellapi.h>

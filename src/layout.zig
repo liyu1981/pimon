@@ -79,6 +79,8 @@ pub const Node = struct {
     /// Minimum size hints (useful for `spacer`).
     width: ?f32 = null,
     height: ?f32 = null,
+    /// Extra font size (points) for text widgets; useful for large clocks.
+    text_larger: ?f32 = null,
 
     // --- `gauge` -----------------------------------------------------------
     /// Static value.  Ignored when `bind_value` is set.
@@ -100,8 +102,10 @@ pub const Node = struct {
     bind_data: ?[]const u8 = null,
 
     // --- both --------------------------------------------------------------
-    /// Accent colour: a name (green, lime, red, yellow, orange, cyan, blue,
-    /// white, gray) or hex "rrggbb" / "aarrggbb".
+    /// Accent/text colour: a name (green, lime, red, yellow, orange, cyan,
+    /// blue, white, gray) or hex "rrggbb" / "aarrggbb".  For gauges and
+    /// sparklines this is the arc/line colour; for text widgets it is the
+    /// label colour.
     color: ?[]const u8 = null,
 
     /// Nested children (`vbox` / `hbox`).
@@ -476,6 +480,17 @@ fn textFor(node: *const Node, b: *const Bindings) []const u8 {
     return node.text orelse "";
 }
 
+fn textOpts(node: *const Node, opts: dvui.Options, base_font: dvui.Font) dvui.Options {
+    var out = opts;
+    if (node.text_larger) |extra| {
+        out = out.override(.{ .font = base_font.larger(extra) });
+    }
+    if (widgets.palette.parse(node.color)) |color| {
+        out = out.override(.{ .color_text = .{ .color = color } });
+    }
+    return out;
+}
+
 fn renderNode(node: *const Node, gpa: std.mem.Allocator, b: *Bindings, idx: usize) void {
     const opts = optionsFor(node, idx);
     const text = textFor(node, b);
@@ -489,11 +504,11 @@ fn renderNode(node: *const Node, gpa: std.mem.Allocator, b: *Bindings, idx: usiz
                 for (children, 0..) |*child, i| renderNode(child, gpa, b, i);
             }
         },
-        .label => dvui.labelNoFmt(@src(), text, .{}, opts),
-        .title => dvui.labelNoFmt(@src(), text, .{}, opts.override(.{ .font = .theme(.title) })),
-        .heading => dvui.labelNoFmt(@src(), text, .{}, opts.override(.{ .font = .theme(.heading) })),
+        .label => dvui.labelNoFmt(@src(), text, .{}, textOpts(node, opts, .theme(.body))),
+        .title => dvui.labelNoFmt(@src(), text, .{}, textOpts(node, opts.override(.{ .font = .theme(.title) }), .theme(.title))),
+        .heading => dvui.labelNoFmt(@src(), text, .{}, textOpts(node, opts.override(.{ .font = .theme(.heading) }), .theme(.heading))),
         .button => {
-            if (dvui.button(@src(), if (text.len > 0) text else "Button", .{}, opts)) {
+            if (dvui.button(@src(), if (text.len > 0) text else "Button", .{}, textOpts(node, opts, .theme(.body)))) {
                 if (node.action) |action| b.action = action;
             }
         },

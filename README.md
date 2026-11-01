@@ -114,15 +114,29 @@ zig build pi2-sdl           # → zig-out/bin/pimon-pi2-sdl
 zig build pi2
 ```
 
+### Convenience build scripts
+
+```sh
+./scripts/build-dev.sh       # host Debug + Windows agent Debug → dist/dev/
+./scripts/build-release.sh   # Pi 2/host ReleaseFast + agent ReleaseSafe → dist/release/
+```
+
+`build-dev.sh` produces `pimon-sdl`, `pimon-fb`, and `pimon-agent-win11.exe`
+under `dist/dev/`.  `build-release.sh` also builds the ARMv7 binaries and
+produces `pimon-pi2-sdl`, `pimon-pi2-fb`, host release binaries, and the
+release Windows agent under `dist/release/`.
+
 ### Windows 11 agent
 
 ```sh
 zig build win -Doptimize=ReleaseSafe   # → zig-out/bin/pimon-agent-win11.exe (x86_64-windows-gnu)
 ```
 
-The agent is a headless daemon that samples Win11 CPU/RAM/network/GPU (PDH +
-DXGI, optional NVML) and pushes batches to pimon.  On Windows, create and edit
-its config with:
+The agent is a Win32 tray application that samples Win11 CPU/RAM/network/GPU
+(PDH + DXGI, optional NVML) and pushes batches to pimon.  It starts hidden in
+the system tray; double-click the icon to see the live log, Start/Stop buttons,
+and an editable config panel.  On Windows you can also create/edit the config
+with:
 
 ```powershell
 .\pimon-agent-win11.exe install-config
@@ -376,7 +390,9 @@ Common properties: `text`, `bind_text` (live text for
 `label`/`title`/`heading`/`button`, wins over `text`), `bind_type`
 (`.float`/`.series`/`.text`/`.boolean`; optional, inferred from the binding
 field), `expand` (`.none`/`.horizontal`/`.vertical`/`.both`), `bind`, `action`,
-`padding`, `width`, `height`, `color`, `children`.
+`padding`, `width`, `height`, `color` (accent for gauges/sparklines, text colour
+for labels/titles/headings/buttons), `text_larger` (extra points for text,
+used by the Win11 clock), `children`.
 
 ### `gauge`
 
@@ -443,8 +459,9 @@ without any code change.  Everything below is `.float` except `cpu.load_hist`
 
 `layouts/win11-monitor.layout.zon` displays a Windows 11 machine fed by
 `agents/win11` (CPU, RAM, network, GPU utilisation/VRAM/temperature, histories,
-system information).  See `agents/win11/README.md` for building and running the
-agent.
+system information, plus a large colour-coded “Windows Time” date/time row
+under the GPU/network gauges).
+See `agents/win11/README.md` for building and running the agent.
 
 `layouts/pi-monitor.layout.zon` is the full system monitor: CPU load, CPU
 utilisation, temperature, RAM, network down/up gauges, load history, and a

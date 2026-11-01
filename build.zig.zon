@@ -18,6 +18,7 @@
         "src",
         "agents",
         "layouts",
+        "scripts",
         "vendor",
         "README.md",
         "pimon.config.example",

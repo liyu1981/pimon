@@ -1,10 +1,12 @@
 # pimon Win11 agent
 
-Headless Windows 11 metrics agent for a pimon server on a Raspberry Pi.
+Windows 11 tray application for monitoring a pimon server on a Raspberry Pi.
 
 It samples local CPU, memory, network, system information and GPU metrics and
-pushes typed JSON batches to pimon over `POST /api/v1/data`.  There is no UI on
-Windows.
+pushes typed JSON batches to pimon over `POST /api/v1/data`.  The app starts
+minimised to the system tray; double-click the tray icon (or right-click →
+Open) to see the live log, Start/Stop controls, and an editable configuration
+panel.
 
 ## Build
 
@@ -16,9 +18,13 @@ zig build win -Doptimize=ReleaseSafe
 The agent uses only Win32/PDH/DXGI APIs; it does not depend on DVUI or SDL.
 NVML (`nvml.dll`) is loaded dynamically when an NVIDIA adapter is present.
 
-## Config
+## First run
 
-Create the config and open it in Notepad:
+If `%APPDATA%\pimon\agent.config` does not exist, the app opens its window
+with a template you can edit directly.  Fill in `PIMON_URL` and
+`PIMON_HTTP_SECRET`, click **Save Config**, then **Start**.
+
+You can also create the file and open it in Notepad:
 
 ```powershell
 .\pimon-agent-win11.exe install-config
@@ -42,15 +48,25 @@ PIMON_AGENT_NAME=win11
 PIMON_ENABLE_GPU=1
 ```
 
-Use `--config PATH` to point elsewhere.  CLI overrides:
+## Running
 
 ```text
-pimon-agent-win11 --url http://pi:8717 --token ... --interval-ms 1000 --once
+pimon-agent-win11.exe                 # tray app, auto-starts if config is valid
+pimon-agent-win11.exe --show          # also show the window at launch
+pimon-agent-win11.exe --config PATH   # alternate config
+pimon-agent-win11.exe --once          # one sample + upload, result in a message box
+pimon-agent-win11.exe install-config  # create config and open Notepad
 ```
 
-- `--once` samples once, posts, and exits (useful for smoke tests).
-- `--no-gpu` disables GPU collection.
-- `--verbose` prints the JSON batch.
+Window controls:
+
+- **Start / Stop** — control the sampling worker.
+- **Save Config** — write the editor contents to `agent.config`.
+- **Reload** — discard edits and reload the file.
+- **Hide** — return to the tray.
+- **Exit** — stop the worker and quit.  Closing the window only hides it.
+
+The tray menu also has Open, Start, Stop and Exit.
 
 ## Keys
 
@@ -77,7 +93,10 @@ Text:
 
 ```text
 win.sys.host  win.sys.os  win.sys.cpu_model  win.sys.cpu
-win.sys.uptime  win.sys.mem  win.sys.net
+win.sys.uptime  win.sys.mem  win.sys.net  win.sys.updated
+win.sys.updated.weekday  win.sys.updated.year  win.sys.updated.month
+win.sys.updated.day      win.sys.updated.hour  win.sys.updated.minute
+win.sys.updated.second
 win.net.name  win.gpu.name  win.gpu.provider
 ```
 
@@ -95,12 +114,10 @@ AMD ADL/ADLX and LibreHardwareMonitor are not bundled in this version.  AMD
 utilisation/VRAM already work through PDH/DXGI; add ADL only if GPU temperature
 or power is needed on a specific AMD machine.
 
-## Running
-
-```text
-pimon-agent-win11.exe --once -v
-pimon-agent-win11.exe
-```
+Each upload uses a fresh HTTP connection.  After Windows sleep/hibernate the
+agent detects the elapsed-time gap, recreates its HTTP client, and retries a
+failed upload once.  The `win.sys.updated` text key carries the Windows local
+sample time, so `win11-monitor` shows the last successful update.
 
 For automatic startup use Task Scheduler ("At log on") or a service wrapper
 such as NSSM.  A native Windows service mode is not implemented yet; GPU

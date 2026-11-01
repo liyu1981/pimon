@@ -40,6 +40,14 @@ pub const Sampler = struct {
     mem_text: [64]u8 = @splat(0),
     net_name: [64]u8 = @splat(0),
     net_text: [96]u8 = @splat(0),
+    updated_text: [48]u8 = @splat(0),
+    updated_weekday: [8]u8 = @splat(0),
+    updated_year: [8]u8 = @splat(0),
+    updated_month: [4]u8 = @splat(0),
+    updated_day: [4]u8 = @splat(0),
+    updated_hour: [4]u8 = @splat(0),
+    updated_minute: [4]u8 = @splat(0),
+    updated_second: [4]u8 = @splat(0),
 
     queue_counter: ?PdhScalar = null,
 
@@ -66,6 +74,7 @@ pub const Sampler = struct {
         self.sampleMemory();
         self.sampleNetwork();
         self.sampleUptime();
+        self.sampleUpdated();
         self.cpu_hist.push(self.cpu_util_pct);
     }
 
@@ -199,6 +208,28 @@ pub const Sampler = struct {
                 secs % 60,
             });
         }
+    }
+
+    fn sampleUpdated(self: *Sampler) void {
+        var st: c.SYSTEMTIME = std.mem.zeroes(c.SYSTEMTIME);
+        c.GetLocalTime(&st);
+        const weekdays = [_][]const u8{ "Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat" };
+        formatInto(&self.updated_weekday, "{s}", .{weekdays[st.wDayOfWeek % 7]});
+        formatInto(&self.updated_year, "{d:0>4}", .{st.wYear});
+        formatInto(&self.updated_month, "{d:0>2}", .{st.wMonth});
+        formatInto(&self.updated_day, "{d:0>2}", .{st.wDay});
+        formatInto(&self.updated_hour, "{d:0>2}", .{st.wHour});
+        formatInto(&self.updated_minute, "{d:0>2}", .{st.wMinute});
+        formatInto(&self.updated_second, "{d:0>2}", .{st.wSecond});
+        formatInto(&self.updated_text, "last update {s} {s}-{s}-{s} {s}:{s}:{s}", .{
+            std.mem.sliceTo(&self.updated_weekday, 0),
+            std.mem.sliceTo(&self.updated_year, 0),
+            std.mem.sliceTo(&self.updated_month, 0),
+            std.mem.sliceTo(&self.updated_day, 0),
+            std.mem.sliceTo(&self.updated_hour, 0),
+            std.mem.sliceTo(&self.updated_minute, 0),
+            std.mem.sliceTo(&self.updated_second, 0),
+        });
     }
 
     fn readStaticInfo(self: *Sampler) void {
