@@ -1,0 +1,102 @@
+// pimon monitor for a Windows 11 machine running agents/win11.
+//
+//   ./pimon-fb --layout layouts/win11-monitor.layout.zon
+//
+// The agent pushes batches to POST /api/v1/data; every binding below declares
+// the kind it expects so the universal data API rejects mismatches.
+
+.{
+    .component = .vbox,
+    .expand = .horizontal,
+    .padding = 8,
+    .children = .{
+
+        .{ .component = .title, .text = "win11-monitor" },
+        .{ .component = .separator },
+
+        // ---- primary gauges ---------------------------------------------
+        .{
+            .component = .hbox,
+            .expand = .horizontal,
+            .children = .{
+                .{ .component = .gauge, .text = "CPU UTIL", .bind_value = "win.cpu.util_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "cyan", .width = 180.0, .height = 95.0 },
+                .{ .component = .gauge, .text = "CPU QUEUE", .bind_value = "win.cpu.queue", .bind_type = .float, .max = 8.0, .unit = "queue", .color = "green", .width = 180.0, .height = 95.0 },
+                .{ .component = .gauge, .text = "RAM USED", .bind_value = "win.ram.used_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "lime", .width = 180.0, .height = 95.0 },
+                .{ .component = .gauge, .text = "GPU UTIL", .bind_value = "win.gpu.util_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "orange", .width = 180.0, .height = 95.0 },
+            },
+        },
+
+        .{ .component = .separator },
+
+        // ---- history + secondary gauges ---------------------------------
+        .{
+            .component = .hbox,
+            .expand = .horizontal,
+            .children = .{
+                .{
+                    .component = .vbox,
+                    .expand = .horizontal,
+                    .children = .{
+                        .{ .component = .heading, .text = "HISTORY" },
+                        .{ .component = .label, .text = "CPU %" },
+                        .{ .component = .sparkline, .bind_data = "win.cpu.util_hist", .bind_type = .series, .color = "cyan", .height = 38.0, .width = 260.0 },
+                        .{ .component = .label, .text = "GPU %" },
+                        .{ .component = .sparkline, .bind_data = "win.gpu.util_hist", .bind_type = .series, .color = "orange", .height = 38.0, .width = 260.0 },
+                    },
+                },
+                .{
+                    .component = .hbox,
+                    .children = .{
+                        .{ .component = .gauge, .text = "GPU VRAM", .bind_value = "win.gpu.mem_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "orange", .width = 125.0, .height = 80.0 },
+                        .{ .component = .gauge, .text = "GPU TEMP", .bind_value = "win.gpu.temp_c", .bind_type = .float, .max = 100.0, .unit = "°C", .color = "red", .width = 125.0, .height = 80.0 },
+                        .{ .component = .gauge, .text = "DOWN", .bind_value = "win.net.rx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "green", .width = 125.0, .height = 80.0 },
+                        .{ .component = .gauge, .text = "UP", .bind_value = "win.net.tx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "blue", .width = 125.0, .height = 80.0 },
+                    },
+                },
+            },
+        },
+
+        .{ .component = .separator },
+
+        // ---- system information -----------------------------------------
+        .{ .component = .heading, .text = "SYSTEM" },
+        .{
+            .component = .hbox,
+            .expand = .horizontal,
+            .children = .{
+                .{
+                    .component = .vbox,
+                    .expand = .horizontal,
+                    .children = .{
+                        .{ .component = .label, .bind_text = "win.sys.host", .bind_type = .text },
+                        .{ .component = .label, .bind_text = "win.sys.os", .bind_type = .text },
+                    },
+                },
+                .{
+                    .component = .vbox,
+                    .expand = .horizontal,
+                    .children = .{
+                        .{ .component = .label, .bind_text = "win.sys.cpu_model", .bind_type = .text },
+                        .{ .component = .label, .bind_text = "win.sys.cpu", .bind_type = .text },
+                    },
+                },
+                .{
+                    .component = .vbox,
+                    .expand = .horizontal,
+                    .children = .{
+                        .{ .component = .label, .bind_text = "win.gpu.name", .bind_type = .text },
+                        .{ .component = .label, .bind_text = "win.sys.mem", .bind_type = .text },
+                    },
+                },
+                .{
+                    .component = .vbox,
+                    .expand = .horizontal,
+                    .children = .{
+                        .{ .component = .label, .bind_text = "win.sys.uptime", .bind_type = .text },
+                        .{ .component = .label, .bind_text = "win.net.name", .bind_type = .text },
+                    },
+                },
+            },
+        },
+    },
+}

@@ -26,12 +26,14 @@ src/dashboard.zig    screen composition (built-in + .layout.zon)
 src/layout.zig       .layout.zon engine: schema + ZON parser + interpreter
 src/metrics.zig      host metrics sampled from /proc (+ load history)
 src/net.zig          optional HTTP + WebSocket control listener
+src/data.zig         universal typed data values (float/series/text/bool)
+agents/win11/        Windows 11 daemon that pushes metrics to pimon
 src/widgets.zig      module root for the reusable drawing widgets
 src/widgets/arc.zig  Canvas-style arc() with round end caps
 src/widgets/gauge.zig     radial gauge (background arc + value arc)
 src/widgets/sparkline.zig line chart of a numeric series
 src/widgets/palette.zig   widget colours + name/hex parser
-layouts/*.layout.zon runtime-driven UI markup (edited without recompiling)
+layouts/*.layout.zon runtime-driven UI markup (pi-monitor, win11-monitor, ...)
 src/backend.zig      DVUI backend: framebuffer + evdev (fb mode)
 src/fbdev.zig        /dev/fb0 ioctl + mmap, pixel packing (fb mode)
 src/soft_render.zig  CPU triangle rasterizer (fb mode)
@@ -111,6 +113,23 @@ zig build pi2-sdl           # → zig-out/bin/pimon-pi2-sdl
 # both ARMv7 binaries at once
 zig build pi2
 ```
+
+### Windows 11 agent
+
+```sh
+zig build win -Doptimize=ReleaseSafe   # → zig-out/bin/pimon-agent-win11.exe (x86_64-windows-gnu)
+```
+
+The agent is a headless daemon that samples Win11 CPU/RAM/network/GPU (PDH +
+DXGI, optional NVML) and pushes batches to pimon.  On Windows, create and edit
+its config with:
+
+```powershell
+.\pimon-agent-win11.exe install-config
+```
+
+See `agents/win11/README.md` for the config file, keys and Windows startup
+options.
 
 No `libsdl2-dev`, no `dpkg --add-architecture`, no multiarch.  SDL2 is compiled
 from the vendored source for `arm-linux-gnueabihf`.  The KMSDRM driver
@@ -282,6 +301,21 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
 | POST | `/api/v1/action` | dispatch `reload_layout`, `quit`, or a custom action |
 | GET | `/api/v1/ws` | WebSocket upgrade |
 
+Both a single value and a typed batch are accepted:
+
+```json
+{"key":"cpu.load_pct","value":42}
+```
+
+```json
+{"agent":"win11","ts":1762000000123,
+ "values":{"win.cpu.util_pct":23.4,"win.gpu.util_pct":12.0,
+           "win.cpu.util_hist":[12,18,23]}}
+```
+
+The batch form is what the Windows agent (`agents/win11`) uses once per
+interval.
+
 `value` selects the binding kind: number -> float, boolean -> an already
 registered checkbox, string -> text, array of numbers -> series.  Keys are limited to
 `A-Za-z0-9._-` (max 128 bytes), series to 512 samples, request bodies to 64 KiB.
@@ -402,9 +436,15 @@ without any code change.  Everything below is `.float` except `cpu.load_hist`
 | `sys.net` / `sys.net_total` | text: interface + throughput / interface + totals |
 
 ```sh
-./zig-out/bin/pimon-fb --layout layouts/pi-monitor.layout.zon   # gauges + sparklines
-./zig-out/bin/pimon-fb --layout layouts/dashboard.layout.zon # plain widgets
+./zig-out/bin/pimon-fb --layout layouts/pi-monitor.layout.zon   # Pi gauges + sparklines
+./zig-out/bin/pimon-fb --layout layouts/win11-monitor.layout.zon # Win11 agent data
+./zig-out/bin/pimon-fb --layout layouts/dashboard.layout.zon     # plain widgets
 ```
+
+`layouts/win11-monitor.layout.zon` displays a Windows 11 machine fed by
+`agents/win11` (CPU, RAM, network, GPU utilisation/VRAM/temperature, histories,
+system information).  See `agents/win11/README.md` for building and running the
+agent.
 
 `layouts/pi-monitor.layout.zon` is the full system monitor: CPU load, CPU
 utilisation, temperature, RAM, network down/up gauges, load history, and a

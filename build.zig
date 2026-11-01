@@ -60,6 +60,72 @@ pub fn build(b: *std.Build) void {
     const pi2_step = b.step("pi2", "Pi 2 (ARMv7): build both the SDL2 and software-framebuffer binaries");
     pi2_step.dependOn(sdl_step);
     pi2_step.dependOn(fb_step);
+
+    buildWin11Agent(b, test_step, optimize);
+}
+
+/// Windows 11 monitoring agent: a console daemon that samples local metrics
+/// and pushes typed values to a pimon server.
+fn buildWin11Agent(b: *std.Build, test_step: ?*std.Build.Step, optimize: std.builtin.OptimizeMode) void {
+    const target = b.resolveTargetQuery(.{
+        .cpu_arch = .x86_64,
+        .os_tag = .windows,
+        .abi = .gnu,
+    });
+
+    const winapi_c = b.addTranslateC(.{
+        .root_source_file = b.path("agents/win11/winapi.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const data_mod = b.createModule(.{
+        .root_source_file = b.path("src/data.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const agent_mod = b.createModule(.{
+        .root_source_file = b.path("agents/win11/main.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "winapi", .module = winapi_c.createModule() },
+            .{ .name = "data", .module = data_mod },
+        },
+    });
+    agent_mod.linkSystemLibrary("pdh", .{});
+    agent_mod.linkSystemLibrary("iphlpapi", .{});
+    agent_mod.linkSystemLibrary("dxgi", .{});
+    agent_mod.linkSystemLibrary("ole32", .{});
+    agent_mod.linkSystemLibrary("ntdll", .{});
+    agent_mod.linkSystemLibrary("advapi32", .{});
+
+    const exe = b.addExecutable(.{
+        .name = "pimon-agent-win11",
+        .root_module = agent_mod,
+    });
+    exe.subsystem = .console;
+
+    const step = b.step("win", "Windows 11 agent (x86_64-windows-gnu)");
+    step.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "pimon-agent-win11.exe" }).step);
+
+    // Host tests for the parts that do not touch Win32.
+    if (test_step) |ts| {
+        const host_data = b.createModule(.{
+            .root_source_file = b.path("src/data.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        });
+        const logic_mod = b.createModule(.{
+            .root_source_file = b.path("agents/win11/test.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .imports = &.{.{ .name = "data", .module = host_data }},
+        });
+        ts.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = logic_mod })).step);
+    }
 }
 
 /// DVUI's SDL2 backend + our dashboard.

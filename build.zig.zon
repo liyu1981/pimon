@@ -16,7 +16,10 @@
         "build.zig",
         "build.zig.zon",
         "src",
+        "agents",
+        "layouts",
         "vendor",
         "README.md",
+        "pimon.config.example",
     },
 }

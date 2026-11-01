@@ -21,7 +21,7 @@
 //! | --- | --- | --- |
 //! | GET  | `/api/v1/health` (alias `/healthz`) | liveness + uptime (no token needed) |
 //! | GET  | `/api/v1/metrics` | last JSON snapshot published by the UI |
-//! | POST | `/api/v1/data`    | `{"key":"cpu.load_pct","value":42}` |
+//! | POST | `/api/v1/data`    | single `{key,value}` or `{"values":{...}}` |
 //! | POST | `/api/v1/action`  | `{"action":"reload_layout"}` |
 //! | GET  | `/api/v1/ws`      | WebSocket; text frames use the same JSON |
 //!
@@ -43,6 +43,7 @@ const max_body = 64 * 1024;
 const max_clients = 16;
 const max_events = 64;
 const max_series = 512;
+const max_batch = 128;
 const max_key = 128;
 const max_secret = 256;
 const max_bind = 64;
@@ -450,8 +451,8 @@ pub const Event = union(enum) {
 };
 
 /// Parse the JSON accepted by POST /api/v1/data and /api/v1/action, and by
-/// WebSocket text frames.
-pub fn eventFromJson(gpa: Allocator, body: []const u8) !Event {
+/// WebSocket text frames.  A batch is `{"values":{"key":value,...}}`.
+pub fn eventsFromJson(gpa: Allocator, body: []const u8, out: *std.ArrayList(Event)) !void {
     var parsed = try std.json.parseFromSlice(std.json.Value, gpa, body, .{});
     defer parsed.deinit();
 
@@ -460,22 +461,63 @@ pub fn eventFromJson(gpa: Allocator, body: []const u8) !Event {
         else => return error.InvalidBody,
     };
 
+    if (obj.get("values")) |values_value| {
+        const map = switch (values_value) {
+            .object => |o| o,
+            else => return error.InvalidBody,
+        };
+        var it = map.iterator();
+        while (it.next()) |entry| {
+            if (out.items.len >= max_batch) return error.BatchTooLarge;
+            const ev = try eventFromKeyValue(gpa, entry.key_ptr.*, entry.value_ptr.*);
+            out.append(gpa, ev) catch |err| {
+                var e = ev;
+                e.deinit(gpa);
+                return err;
+            };
+        }
+        return;
+    }
+
     if (obj.get("action")) |v| {
         const action = switch (v) {
-            .string => |s| s,
+            .string => |str| str,
             else => return error.InvalidBody,
         };
         if (!validName(action)) return error.InvalidBody;
-        return .{ .action = try gpa.dupe(u8, action) };
+        const owned = try gpa.dupe(u8, action);
+        errdefer gpa.free(owned);
+        try out.append(gpa, .{ .action = owned });
+        return;
     }
 
     const key = switch (obj.get("key") orelse return error.InvalidBody) {
-        .string => |s| s,
+        .string => |str| str,
         else => return error.InvalidBody,
     };
-    if (!validName(key)) return error.InvalidBody;
-
     const value = obj.get("value") orelse return error.InvalidBody;
+    const ev = try eventFromKeyValue(gpa, key, value);
+    out.append(gpa, ev) catch |err| {
+        var e = ev;
+        e.deinit(gpa);
+        return err;
+    };
+}
+
+/// Single-event wrapper kept for tests and callers that only accept one value.
+pub fn eventFromJson(gpa: Allocator, body: []const u8) !Event {
+    var events: std.ArrayList(Event) = .empty;
+    defer {
+        for (events.items) |*ev| ev.deinit(gpa);
+        events.deinit(gpa);
+    }
+    try eventsFromJson(gpa, body, &events);
+    if (events.items.len != 1) return error.InvalidBody;
+    return events.orderedRemove(0);
+}
+
+fn eventFromKeyValue(gpa: Allocator, key: []const u8, value: std.json.Value) !Event {
+    if (!validName(key)) return error.InvalidBody;
     switch (value) {
         .float => |f| {
             if (!std.math.isFinite(f)) return error.InvalidBody;
@@ -485,10 +527,10 @@ pub fn eventFromJson(gpa: Allocator, body: []const u8) !Event {
             return .{ .set_float = .{ .key = try gpa.dupe(u8, key), .value = @floatFromInt(i) } };
         },
         .bool => |b| return .{ .set_bool = .{ .key = try gpa.dupe(u8, key), .value = b } },
-        .string => |s| {
+        .string => |str| {
             const owned_key = try gpa.dupe(u8, key);
             errdefer gpa.free(owned_key);
-            return .{ .set_text = .{ .key = owned_key, .value = try gpa.dupe(u8, s) } };
+            return .{ .set_text = .{ .key = owned_key, .value = try gpa.dupe(u8, str) } };
         },
         .array => |arr| {
             if (arr.items.len > max_series) return error.InvalidBody;
@@ -876,23 +918,34 @@ fn enqueueBody(server: *Server, req: *std.http.Server.Request, want_action: bool
     };
     defer server.gpa.free(body);
 
-    var ev = eventFromJson(server.gpa, body) catch {
+    var events: std.ArrayList(Event) = .empty;
+    defer {
+        for (events.items) |*ev| ev.deinit(server.gpa);
+        events.deinit(server.gpa);
+    }
+    eventsFromJson(server.gpa, body, &events) catch {
         try respondJson(server, req, .bad_request, ErrorBody{ .@"error" = "invalid JSON payload" }, true, false);
         return .keep;
     };
 
-    if (want_action and ev != .action) {
-        ev.deinit(server.gpa);
-        try respondJson(server, req, .bad_request, ErrorBody{ .@"error" = "expected {\"action\":\"...\"}" }, true, false);
-        return .keep;
-    }
-    if (!want_action and ev == .action) {
-        ev.deinit(server.gpa);
-        try respondJson(server, req, .bad_request, ErrorBody{ .@"error" = "expected {\"key\":...,\"value\":...}" }, true, false);
-        return .keep;
+    if (want_action) {
+        if (events.items.len != 1 or events.items[0] != .action) {
+            try respondJson(server, req, .bad_request, ErrorBody{ .@"error" = "expected {\"action\":\"...\"}" }, true, false);
+            return .keep;
+        }
+    } else {
+        for (events.items) |ev| {
+            if (ev == .action) {
+                try respondJson(server, req, .bad_request, ErrorBody{ .@"error" = "expected {\"key\":...,\"value\":...}" }, true, false);
+                return .keep;
+            }
+        }
     }
 
-    server.queue.push(server.io, server.gpa, ev);
+    while (events.items.len > 0) {
+        const ev = events.orderedRemove(0);
+        server.queue.push(server.io, server.gpa, ev);
+    }
     try respondJson(server, req, .ok, OkBody{}, true, false);
     return .keep;
 }
@@ -984,11 +1037,19 @@ fn serveWebSocket(server: *Server, req: *std.http.Server.Request, key: []const u
 
         switch (msg.opcode) {
             .text => {
-                const ev = eventFromJson(server.gpa, msg.data) catch {
+                var events: std.ArrayList(Event) = .empty;
+                defer {
+                    for (events.items) |*ev| ev.deinit(server.gpa);
+                    events.deinit(server.gpa);
+                }
+                eventsFromJson(server.gpa, msg.data, &events) catch {
                     writeWsError(server, &ws, "invalid JSON payload") catch return;
                     continue;
                 };
-                server.queue.push(server.io, server.gpa, ev);
+                while (events.items.len > 0) {
+                    const ev = events.orderedRemove(0);
+                    server.queue.push(server.io, server.gpa, ev);
+                }
                 ws.writeMessage("{\"ok\":true,\"queued\":true}", .text) catch return;
             },
             .ping => ws.writeMessage(msg.data, .pong) catch return,
@@ -1124,6 +1185,26 @@ test "eventFromJson: scalar, series, bool and action" {
     var a = try eventFromJson(gpa, "{\"action\":\"reload_layout\"}");
     defer a.deinit(gpa);
     try std.testing.expectEqualStrings("reload_layout", a.action);
+}
+
+test "eventsFromJson: typed batch" {
+    const gpa = std.testing.allocator;
+    var events: std.ArrayList(Event) = .empty;
+    defer {
+        for (events.items) |*ev| ev.deinit(gpa);
+        events.deinit(gpa);
+    }
+
+    try eventsFromJson(
+        gpa,
+        "{\"agent\":\"win11\",\"values\":{\"win.cpu.util_pct\":12.5,\"win.cpu.hist\":[1,2],\"win.sys.host\":\"desk\",\"win.online\":true}}",
+        &events,
+    );
+    try std.testing.expectEqual(@as(usize, 4), events.items.len);
+    try std.testing.expectEqual(@as(f32, 12.5), events.items[0].set_float.value);
+    try std.testing.expectEqual(@as(usize, 2), events.items[1].set_series.values.len);
+    try std.testing.expectEqualStrings("desk", events.items[2].set_text.value);
+    try std.testing.expect(events.items[3].set_bool.value);
 }
 
 test "eventFromJson: rejects malformed input" {
