@@ -126,6 +126,7 @@ fn buildSdl(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.built
                 .{ .name = "dashboard", .module = ui.dashboard },
                 .{ .name = "layout", .module = ui.layout },
                 .{ .name = "metrics", .module = ui.metrics },
+                .{ .name = "net", .module = ui.net },
                 .{ .name = "sdl-backend", .module = sdl_mod },
             },
         }),
@@ -162,6 +163,7 @@ fn buildFb(b: *std.Build, target: std.Build.ResolvedTarget, optimize: std.builti
                 .{ .name = "dashboard", .module = ui.dashboard },
                 .{ .name = "layout", .module = ui.layout },
                 .{ .name = "metrics", .module = ui.metrics },
+                .{ .name = "net", .module = ui.net },
                 .{ .name = "backend", .module = backend_mod },
             },
         }),
@@ -180,6 +182,7 @@ const UiModules = struct {
     layout: *std.Build.Module,
     widgets: *std.Build.Module,
     metrics: *std.Build.Module,
+    net: *std.Build.Module,
 };
 
 fn makeUiModules(
@@ -206,6 +209,14 @@ fn makeUiModules(
     });
     addTests(b, metrics_mod, test_step);
 
+    // Optional HTTP/WebSocket control listener (pure std, no DVUI).
+    const net_mod = b.createModule(.{
+        .root_source_file = b.path("src/net.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addTests(b, net_mod, test_step);
+
     // The .layout.zon markup engine (schema + parser + interpreter).
     const layout_mod = b.createModule(.{
         .root_source_file = b.path("src/layout.zig"),
@@ -228,10 +239,17 @@ fn makeUiModules(
             .{ .name = "widgets", .module = widgets_mod },
             .{ .name = "layout", .module = layout_mod },
             .{ .name = "metrics", .module = metrics_mod },
+            .{ .name = "net", .module = net_mod },
         },
     });
 
-    return .{ .dashboard = dashboard_mod, .layout = layout_mod, .widgets = widgets_mod, .metrics = metrics_mod };
+    return .{
+        .dashboard = dashboard_mod,
+        .layout = layout_mod,
+        .widgets = widgets_mod,
+        .metrics = metrics_mod,
+        .net = net_mod,
+    };
 }
 
 fn addTests(b: *std.Build, mod: *std.Build.Module, test_step: ?*std.Build.Step) void {

@@ -25,6 +25,7 @@ src/main_fb.zig      software /dev/fb0 front-end (-Dgui=fb)
 src/dashboard.zig    screen composition (built-in + .layout.zon)
 src/layout.zig       .layout.zon engine: schema + ZON parser + interpreter
 src/metrics.zig      host metrics sampled from /proc (+ load history)
+src/net.zig          optional HTTP + WebSocket control listener
 src/widgets.zig      module root for the reusable drawing widgets
 src/widgets/arc.zig  Canvas-style arc() with round end caps
 src/widgets/gauge.zig     radial gauge (background arc + value arc)
@@ -150,6 +151,7 @@ zig build -Dgui=fb run -- \
 | `--no-vsync` | disable vertical sync |
 | `--no-drm-master` | set `SDL_KMSDRM_REQUIRE_DRM_MASTER=0` |
 | `--light` / `--dark` | colour scheme |
+| `--no-http` | disable the `~/.config/pimon.config` control listener |
 
 The relevant SDL hints are applied before `SDL_Init`:
 
@@ -181,9 +183,108 @@ Build-time flags ( Zig `build` options, not runtime flags):
 | `--light` / `--dark`, `--clear RRGGBB` | appearance |
 | `--no-input`, `--keyboard PATH`, `--pointer PATH` | evdev input control |
 | `--no-console` | leave the VT in text mode |
+| `--no-http` | disable the `~/.config/pimon.config` control listener |
 
 Keyboard controls (both backends): `Tab`/`Shift-Tab` move focus, `Enter`/`Space`
 activate, `Esc` or the Quit button exits.
+
+## Network control listener
+
+Both front-ends can expose a small REST + WebSocket API so another device can
+read live metrics or inject values into a `.layout.zon` screen.  It is **off by
+default** and configured from an env-file at `~/.config/pimon.config`:
+
+```sh
+mkdir -p ~/.config
+umask 077
+cat > ~/.config/pimon.config <<CONFIG
+PIMON_HTTP_ENABLED=1
+PIMON_HTTP_BIND=127.0.0.1
+PIMON_HTTP_PORT=8717
+PIMON_HTTP_SECRET=$(openssl rand -base64 32)
+CONFIG
+chmod 600 ~/.config/pimon.config
+```
+
+A commented template lives in `pimon.config.example`.
+
+| key | meaning |
+| --- | --- |
+| `PIMON_HTTP_ENABLED` | `1`/`true`/`on`/`yes` to start the listener (default off) |
+| `PIMON_HTTP_BIND` | local IP literal to bind (default `127.0.0.1`) |
+| `PIMON_HTTP_PORT` | TCP port (default `8717`) |
+| `PIMON_HTTP_SECRET` | bearer token (alias `PIMON_HTTP_TOKEN`); required |
+
+`#`/`;` comments, `export KEY=...`, blank lines and single/double quotes are
+accepted.  Pass `--no-http` to ignore the file for one run.
+
+The listener fails closed: with no secret it stays disabled.  Every request,
+including the WebSocket handshake, needs:
+
+```
+Authorization: Bearer <PIMON_HTTP_SECRET>
+```
+
+The token is compared via SHA-256 digests in constant time and is never logged.
+
+> **Security:** there is no TLS.  Keep the default loopback bind, or put the
+> listener on a trusted LAN / behind an SSH tunnel (`ssh -L 8717:127.0.0.1:8717
+> pi@host`).  Requests, including the token, are plaintext on the wire.
+
+### REST
+
+```sh
+TOKEN=$(grep PIMON_HTTP_SECRET ~/.config/pimon.config | cut -d= -f2-)
+BASE=http://127.0.0.1:8717/api/v1
+
+curl -H "Authorization: Bearer $TOKEN" $BASE/health
+curl -H "Authorization: Bearer $TOKEN" $BASE/metrics
+
+# inject a scalar into a gauge bound with bind_value="power.w"
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -d '{"key":"power.w","value":12.5}' $BASE/data
+
+# inject a sparkline series bound with bind_data="power.history"
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -d '{"key":"power.history","value":[3,5,2,8,6,9]}' $BASE/data
+
+# set an existing checkbox binding, or dispatch an app action
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -d '{"key":"demo.animate","value":false}' $BASE/data
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -d '{"action":"reload_layout"}' $BASE/action
+```
+
+| method | path | meaning |
+| --- | --- | --- |
+| GET | `/api/v1/health` | `{"ok":true,"uptime_s":...,"clients":...}` |
+| GET | `/api/v1/metrics` | latest metrics snapshot (JSON) |
+| POST | `/api/v1/data` | inject a number, boolean or numeric array |
+| POST | `/api/v1/action` | dispatch `reload_layout`, `quit`, or a custom action |
+| GET | `/api/v1/ws` | WebSocket upgrade |
+
+`value` selects the binding kind: number -> float gauge, boolean -> an already
+registered checkbox, array of numbers -> sparkline series.  Keys are limited to
+`A-Za-z0-9._-` (max 128 bytes), series to 512 samples, request bodies to 64 KiB.
+Injected values are copied into the layout bindings; keys published from `/proc`
+(`cpu.load_pct`, `ram.used_pct`, ...) are refreshed every second and therefore
+override injected values for those names.
+
+### WebSocket
+
+Connect to `ws://host:8717/api/v1/ws` with the bearer header.  Text frames use
+the same JSON objects as `POST /api/v1/data` / `/action`; the server replies
+`{"ok":true,"queued":true}` or a JSON error, and sends a `hello` frame first.
+Frames up to 16 KiB are accepted, binary frames are rejected, and ping frames
+get a pong.
+
+```sh
+websocat -H "Authorization: Bearer $TOKEN" ws://127.0.0.1:8717/api/v1/ws
+```
+
+Limits: 16 concurrent clients, a 64-event inbound queue (oldest dropped when
+full) and 64 KiB HTTP bodies.  Events are drained by the render loop, so network
+threads never touch DVUI state.
 
 ## Layout markup (`*.layout.zon`)
 
@@ -244,7 +345,7 @@ the threshold markers drawn at the end of the sweep.
 
 ### Live data keys
 
-The app publishes metrics from `/proc` each frame (`dashboard.publishLive`),
+The app publishes metrics from `/proc` each frame (`dashboard.publishMetrics`),
 so a layout can bind to them without any code change:
 
 | key | meaning |

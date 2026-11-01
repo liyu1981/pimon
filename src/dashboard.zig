@@ -8,6 +8,7 @@ const dvui = @import("dvui");
 const metrics = @import("metrics");
 const widgets = @import("widgets");
 const layout_mod = @import("layout");
+const net = @import("net");
 
 pub const Channel = struct { bits: u8 = 0, offset: u8 = 0 };
 
@@ -230,6 +231,121 @@ pub fn layoutFrame(
     }
 
     return .ok;
+}
+
+// ---------------------------------------------------------------------------
+// Network listener glue
+// ---------------------------------------------------------------------------
+
+/// Apply one injected event to the layout bindings.  Returns an action name
+/// (borrowed from the event) when the event asked the app to do something.
+/// The event can be freed afterwards because owned copies of key/series live
+/// in the bindings.
+pub fn applyNetEvent(
+    gpa: std.mem.Allocator,
+    bindings: *layout_mod.Bindings,
+    ev: *const net.Event,
+) ?[]const u8 {
+    switch (ev.*) {
+        .set_float => |e| bindings.setFloatOwned(gpa, e.key, e.value) catch {},
+        .set_bool => |e| {
+            if (!bindings.setBool(e.key, e.value)) {
+                std.log.debug("net: no bool binding named '{s}'", .{e.key});
+            }
+        },
+        .set_series => |e| bindings.setSeriesOwned(gpa, e.key, e.values) catch {},
+        .action => |a| return a,
+    }
+    return null;
+}
+
+/// Handle an action from a layout button or from the network listener.
+/// Returns true when the app should quit.
+pub fn runAction(
+    gpa: std.mem.Allocator,
+    action: []const u8,
+    layout: *?layout_mod.Layout,
+    bindings: *layout_mod.Bindings,
+) bool {
+    if (std.mem.eql(u8, action, "quit")) return true;
+    if (std.mem.eql(u8, action, "reload_layout")) {
+        // Rebuild the bindings too: `l.load` frees the old layout arena, and
+        // the registered bool keys point into it.  Injected values are dropped
+        // and can be re-sent by the controller.
+        bindings.deinit(gpa);
+        bindings.* = .{};
+        if (layout.*) |*l| {
+            l.load();
+            l.registerBindings(bindings);
+        }
+        return false;
+    }
+    std.log.info("action: {s}", .{action});
+    return false;
+}
+
+const Snapshot = struct {
+    host: []const u8,
+    kernel: []const u8,
+    uptime_s: u64,
+    load_1: f32,
+    load_5: f32,
+    load_15: f32,
+    cpu_count: u32,
+    cpu_temp_c: f32,
+    mem_used_mb: f32,
+    mem_total_mb: f32,
+    mem_used_pct: f32,
+    fps: f32,
+    load_hist: []const f32,
+    display: struct {
+        width: u32,
+        height: u32,
+        bpp: u32,
+        driver: []const u8,
+    },
+};
+
+/// Serialize the current metrics as the JSON served by
+/// `GET /api/v1/metrics`.  The caller owns the result.
+pub fn snapshotJson(gpa: std.mem.Allocator, m: *const metrics.SystemMetrics, info: DisplayInfo) ![]u8 {
+    const used_kb: f32 = @floatFromInt(m.mem_total_kb -| m.mem_avail_kb);
+    const total_kb: f32 = @floatFromInt(m.mem_total_kb);
+    const snap: Snapshot = .{
+        .host = std.mem.sliceTo(&m.hostname, 0),
+        .kernel = std.mem.sliceTo(&m.kernel, 0),
+        .uptime_s = m.uptime_s,
+        .load_1 = m.load[0],
+        .load_5 = m.load[1],
+        .load_15 = m.load[2],
+        .cpu_count = m.cpu_count,
+        .cpu_temp_c = m.temp_c,
+        .mem_used_mb = used_kb / 1024.0,
+        .mem_total_mb = total_kb / 1024.0,
+        .mem_used_pct = if (total_kb > 0) used_kb / total_kb * 100.0 else 0,
+        .fps = m.fps,
+        .load_hist = m.loadHistory(),
+        .display = .{
+            .width = info.width,
+            .height = info.height,
+            .bpp = info.bpp,
+            .driver = info.driver,
+        },
+    };
+    return std.json.Stringify.valueAlloc(gpa, snap, .{});
+}
+
+/// Build and publish the metrics snapshot, dropping it silently if allocation
+/// fails (the dashboard keeps rendering either way).
+pub fn publishSnapshot(
+    gpa: std.mem.Allocator,
+    server: *net.Server,
+    m: *const metrics.SystemMetrics,
+    info: DisplayInfo,
+) void {
+    const json = snapshotJson(gpa, m, info) catch return;
+    defer gpa.free(json);
+    server.publishSnapshot(json);
 }
 
 // ---------------------------------------------------------------------------

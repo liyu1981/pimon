@@ -110,10 +110,23 @@ pub const Bindings = struct {
     series: std.StringHashMapUnmanaged([]const f32) = .empty,
     action: ?[]const u8 = null,
 
+    /// Keys copied on behalf of the network listener (owned by this map).
+    owned_keys: std.ArrayList([]u8) = .empty,
+    /// Series copied on behalf of the network listener; key + data are owned.
+    owned_series: std.StringHashMapUnmanaged([]f32) = .empty,
+
     pub fn deinit(self: *Bindings, gpa: std.mem.Allocator) void {
         self.bools.deinit(gpa);
         self.floats.deinit(gpa);
         self.series.deinit(gpa);
+        for (self.owned_keys.items) |key| gpa.free(key);
+        self.owned_keys.deinit(gpa);
+        var it = self.owned_series.iterator();
+        while (it.next()) |entry| {
+            gpa.free(entry.key_ptr.*);
+            gpa.free(entry.value_ptr.*);
+        }
+        self.owned_series.deinit(gpa);
         self.* = undefined;
     }
 
@@ -126,6 +139,28 @@ pub const Bindings = struct {
         return self.floats.get(key);
     }
 
+    /// Like `setFloat`, but `key` is copied so callers may free their own
+    /// buffer afterwards (used by the network listener).
+    pub fn setFloatOwned(self: *Bindings, gpa: std.mem.Allocator, key: []const u8, value: f32) !void {
+        try self.owned_keys.ensureUnusedCapacity(gpa, 1);
+        const owned = try gpa.dupe(u8, key);
+        errdefer gpa.free(owned);
+        const gop = try self.floats.getOrPut(gpa, owned);
+        if (gop.found_existing) {
+            gpa.free(owned);
+        } else {
+            self.owned_keys.appendAssumeCapacity(owned);
+        }
+        gop.value_ptr.* = value;
+    }
+
+    /// Set an already-registered checkbox binding; unknown keys are ignored.
+    pub fn setBool(self: *Bindings, key: []const u8, value: bool) bool {
+        const ptr = self.bools.getPtr(key) orelse return false;
+        ptr.* = value;
+        return true;
+    }
+
     // --- live series (sparkline `bind_data`) ------------------------------
     pub fn setSeries(self: *Bindings, gpa: std.mem.Allocator, key: []const u8, data: []const f32) !void {
         _ = try self.series.put(gpa, key, data);
@@ -133,6 +168,27 @@ pub const Bindings = struct {
 
     pub fn getSeries(self: *const Bindings, key: []const u8) ?[]const f32 {
         return self.series.get(key);
+    }
+
+    /// Like `setSeries`, but key and samples are copied (network listener).
+    pub fn setSeriesOwned(self: *Bindings, gpa: std.mem.Allocator, key: []const u8, data: []const f32) !void {
+        try self.series.ensureUnusedCapacity(gpa, 1);
+        try self.owned_series.ensureUnusedCapacity(gpa, 1);
+        const owned_data = try gpa.dupe(f32, data);
+        errdefer gpa.free(owned_data);
+
+        if (self.owned_series.getEntry(key)) |entry| {
+            gpa.free(entry.value_ptr.*);
+            entry.value_ptr.* = owned_data;
+            // The series map must key off our owned copy, never the caller's
+            // buffer: the event (and its key) is freed right after apply.
+            self.series.putAssumeCapacity(entry.key_ptr.*, owned_data);
+        } else {
+            const owned_key = try gpa.dupe(u8, key);
+            errdefer gpa.free(owned_key);
+            self.owned_series.putAssumeCapacity(owned_key, owned_data);
+            self.series.putAssumeCapacity(owned_key, owned_data);
+        }
     }
 
     /// Register a key up front (done for every `bind` in the tree at load time)
@@ -438,6 +494,27 @@ test "gauge and sparkline schema" {
     try std.testing.expect(kids[2].component == .gauge);
     try std.testing.expect(kids[2].bind_value == null);
     try std.testing.expectEqual(@as(f32, 22.4), kids[2].value.?);
+}
+
+test "owned bindings copy keys and data" {
+    const gpa = std.testing.allocator;
+    var b: Bindings = .{};
+    defer b.deinit(gpa);
+
+    var key_buf: [8]u8 = undefined;
+    @memcpy(key_buf[0..4], "temp");
+    try b.setFloatOwned(gpa, key_buf[0..4], 20);
+    key_buf[0] = 'X'; // caller's buffer is free to change
+    try std.testing.expectEqual(@as(f32, 20), b.getFloat("temp").?);
+    try b.setFloatOwned(gpa, "temp", 30); // update, no key growth
+    try std.testing.expectEqual(@as(f32, 30), b.getFloat("temp").?);
+
+    var samples = [_]f32{ 1, 2, 3 };
+    try b.setSeriesOwned(gpa, "hist", &samples);
+    samples[1] = 9;
+    try std.testing.expectEqual(@as(f32, 2), b.getSeries("hist").?[1]);
+    try b.setSeriesOwned(gpa, "hist", &.{ 4, 5 });
+    try std.testing.expectEqual(@as(usize, 2), b.getSeries("hist").?.len);
 }
 
 test "float and series bindings" {

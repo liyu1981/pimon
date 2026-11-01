@@ -21,6 +21,7 @@ const c = SDLBackend.c;
 const touch_mod = @import("touch.zig");
 const layout_mod = @import("layout");
 const metrics = @import("metrics");
+const net = @import("net");
 
 var quit_requested = std.atomic.Value(bool).init(false);
 
@@ -133,6 +134,28 @@ pub fn main(init: std.process.Init) !void {
         info.height,
     });
 
+    // Optional control listener (see src/net.zig).  The config file is only
+    // read here; a missing/invalid file leaves the listener off.
+    const net_cfg = if (cfg.no_http)
+        net.Config{}
+    else
+        net.loadConfig(init.io, init.gpa, init.environ_map.get("HOME"));
+    var net_server: ?net.Server = null;
+    if (net_cfg.enabled) {
+        if (net.Server.init(init.io, init.gpa, &net_cfg)) |server| {
+            net_server = server;
+            net_server.?.start() catch |err| {
+                std.log.err("network listener failed to start: {s}", .{@errorName(err)});
+                net_server.?.deinit();
+                net_server = null;
+            };
+        } else |err| {
+            std.log.err("network listener config invalid: {s}", .{@errorName(err)});
+        }
+    }
+    defer if (net_server) |*s| s.deinit();
+    if (net_server) |*s| dashboard.publishSnapshot(init.gpa, s, &m, info);
+
     // Continuously-animated dashboard: pace frames ourselves so it keeps
     // updating even when dvui has no scheduled animation.
     const frame_ns: i128 = if (cfg.fps > 0) @intFromFloat(1_000_000_000.0 / cfg.fps) else 0;
@@ -150,8 +173,28 @@ pub fn main(init: std.process.Init) !void {
         if (touch_active) touchdev.poll(&win);
 
         m.tick += 1;
-        if (m.shouldSample()) m.sample();
+        if (m.shouldSample()) {
+            m.sample();
+            if (net_server) |*s| dashboard.publishSnapshot(init.gpa, s, &m, info);
+        }
         m.updateFrameStats();
+
+        // Drain data/actions injected over HTTP or WebSocket before drawing, so
+        // the change is visible in this frame.
+        if (net_server) |*s| {
+            var quit_from_net = false;
+            while (s.poll()) |ev| {
+                var e = ev;
+                defer e.deinit(init.gpa);
+                if (dashboard.applyNetEvent(init.gpa, &bindings, &e)) |action| {
+                    if (dashboard.runAction(init.gpa, action, &layout, &bindings)) {
+                        quit_from_net = true;
+                        break;
+                    }
+                }
+            }
+            if (quit_from_net) break;
+        }
 
         // Publish live metrics for `.layout.zon` bindings (gauges/sparklines).
         if (layout != null) dashboard.publishMetrics(init.gpa, &bindings, &m);
@@ -164,15 +207,7 @@ pub fn main(init: std.process.Init) !void {
 
         // Act on an action dispatched by the layout file this frame.
         if (bindings.takeAction()) |action| {
-            if (std.mem.eql(u8, action, "quit")) break;
-            if (std.mem.eql(u8, action, "reload_layout")) {
-                if (layout) |*l| {
-                    l.load();
-                    l.registerBindings(&bindings);
-                }
-            } else {
-                std.log.info("layout action: {s}", .{action});
-            }
+            if (dashboard.runAction(init.gpa, action, &layout, &bindings)) break;
         }
 
         _ = try win.end(.{});
@@ -254,6 +289,7 @@ const Config = struct {
     touch_swap: bool = false,
     touch_invert_x: bool = false,
     touch_invert_y: bool = false,
+    no_http: bool = false,
 
     fn parse(self: *Config, init: std.process.Init) !void {
         var it = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
@@ -300,6 +336,8 @@ const Config = struct {
                 self.dark = true;
             } else if (std.mem.eql(u8, arg, "--layout")) {
                 self.layout_path = it.next() orelse die();
+            } else if (std.mem.eql(u8, arg, "--no-http")) {
+                self.no_http = true;
             } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
                 printUsage();
                 std.process.exit(0);
@@ -338,6 +376,7 @@ fn printUsage() void {
         \\  --touch-invert-y    invert touch Y
         \\  --no-drm-master     allow running without DRM master
         \\  --light | --dark    colour scheme (default dark)
+        \\  --no-http           disable the ~/.config/pimon.config control listener
         \\  -h, --help          show this help
         \\
     , .{});

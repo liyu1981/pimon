@@ -1,0 +1,11 @@
+# pimon control listener.  Copy to ~/.config/pimon.config and chmod 600.
+#
+# Env-file syntax: KEY=VALUE, # or ; comments, optional "export" and quotes.
+# The listener stays off unless PIMON_HTTP_ENABLED is truthy.
+
+PIMON_HTTP_ENABLED=1
+PIMON_HTTP_BIND=127.0.0.1
+PIMON_HTTP_PORT=8717
+
+# Generate one with: openssl rand -base64 32
+PIMON_HTTP_SECRET=replace-me-with-a-long-random-token
