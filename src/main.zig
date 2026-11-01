@@ -35,6 +35,16 @@ pub fn main(init: std.process.Init) !void {
     var cfg = Config{};
     try cfg.parse(init);
 
+    // Config generation does not need a display/backend; exit after writing.
+    if (cfg.gen_config) {
+        const result = net.generateConfig(init.io, init.gpa, init.environ_map.get("HOME")) catch |err| {
+            std.debug.print("pimon: cannot generate config: {s}\n", .{@errorName(err)});
+            std.process.exit(1);
+        };
+        std.debug.print("pimon: control config {s}: ~/.config/pimon.config\n", .{@tagName(result)});
+        return;
+    }
+
     // Force the GPU-on-console path *before* SDL_Init runs.  These are the
     // hints from the SDL KMSDRM/GLES2 setup guide; they can be overridden from
     // the command line for debugging (e.g. --video-driver x11).
@@ -290,6 +300,7 @@ const Config = struct {
     touch_invert_x: bool = false,
     touch_invert_y: bool = false,
     no_http: bool = false,
+    gen_config: bool = false,
 
     fn parse(self: *Config, init: std.process.Init) !void {
         var it = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
@@ -338,6 +349,8 @@ const Config = struct {
                 self.layout_path = it.next() orelse die();
             } else if (std.mem.eql(u8, arg, "--no-http")) {
                 self.no_http = true;
+            } else if (std.mem.eql(u8, arg, "--gen-config")) {
+                self.gen_config = true;
             } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
                 printUsage();
                 std.process.exit(0);
@@ -377,6 +390,7 @@ fn printUsage() void {
         \\  --no-drm-master     allow running without DRM master
         \\  --light | --dark    colour scheme (default dark)
         \\  --no-http           disable the ~/.config/pimon.config control listener
+        \\  --gen-config        create/upgrade ~/.config/pimon.config and exit
         \\  -h, --help          show this help
         \\
     , .{});

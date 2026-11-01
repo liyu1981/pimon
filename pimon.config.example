@@ -1,4 +1,5 @@
 # pimon control listener.  Copy to ~/.config/pimon.config and chmod 600.
+# Prefer `pimon --gen-config` to create/upgrade this file automatically.
 #
 # Env-file syntax: KEY=VALUE, # or ; comments, optional "export" and quotes.
 # The listener stays off unless PIMON_HTTP_ENABLED is truthy.

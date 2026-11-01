@@ -11,15 +11,15 @@
 //! PIMON_HTTP_SECRET=<long random token>
 //! ```
 //!
-//! Every request, including the WebSocket handshake, must send
-//! `Authorization: Bearer <token>`.  The token is never logged and is compared
-//! via SHA-256 digests in constant time.
+//! Every endpoint except health requires `Authorization: Bearer <token>`,
+//! including the WebSocket handshake.  The token is never logged and is
+//! compared via SHA-256 digests in constant time.
 //!
 //! Endpoints:
 //!
 //! | method | path | meaning |
 //! | --- | --- | --- |
-//! | GET  | `/api/v1/health`  | liveness + uptime |
+//! | GET  | `/api/v1/health` (alias `/healthz`) | liveness + uptime (no token needed) |
 //! | GET  | `/api/v1/metrics` | last JSON snapshot published by the UI |
 //! | POST | `/api/v1/data`    | `{"key":"cpu.load_pct","value":42}` |
 //! | POST | `/api/v1/action`  | `{"action":"reload_layout"}` |
@@ -218,6 +218,206 @@ fn parseBool(v: []const u8) ?bool {
         std.ascii.eqlIgnoreCase(v, "no") or
         std.ascii.eqlIgnoreCase(v, "off")) return false;
     return null;
+}
+
+/// `pimon --gen-config` result.
+pub const ConfigInitResult = enum { created, updated, unchanged };
+
+/// Path of the control config for `home` (`$HOME/.config/pimon.config`).
+pub fn configPath(home: ?[]const u8, buf: []u8) error{ HomeNotSet, PathTooLong }![]const u8 {
+    const h = home orelse return error.HomeNotSet;
+    return std.fmt.bufPrint(buf, "{s}/.config/pimon.config", .{h}) catch error.PathTooLong;
+}
+
+/// Create `~/.config/pimon.config`, or upgrade an existing one in place:
+///
+/// * existing values (including `PIMON_HTTP_ENABLED=0`), comments and unknown
+///   keys are preserved;
+/// * missing keys are appended with defaults (enabled=1, bind=127.0.0.1,
+///   port=8717);
+/// * an empty or placeholder secret is replaced with a fresh 32-byte token;
+/// * the file is written atomically with mode 0600.
+///
+/// Running it twice in a row is a no-op (`unchanged`).
+pub fn generateConfig(io: Io, gpa: Allocator, home: ?[]const u8) !ConfigInitResult {
+    var path_buf: [max_path]u8 = undefined;
+    const path = try configPath(home, &path_buf);
+
+    const existing = std.Io.Dir.cwd().readFileAllocOptions(
+        io,
+        path,
+        gpa,
+        .limited(64 * 1024),
+        .@"1",
+        0,
+    ) catch |err| switch (err) {
+        error.FileNotFound => null,
+        else => return err,
+    };
+    defer if (existing) |text| gpa.free(text);
+
+    var generated_buf: [64]u8 = undefined;
+    const generated: []const u8 = if (findExistingSecret(existing) != null) "" else blk: {
+        var bytes: [32]u8 = undefined;
+        try Io.randomSecure(io, &bytes);
+        generated_buf = std.fmt.bytesToHex(bytes, .lower);
+        break :blk &generated_buf;
+    };
+
+    const content = try renderConfig(gpa, existing, generated);
+    defer gpa.free(content);
+
+    const result: ConfigInitResult = if (existing == null)
+        .created
+    else if (std.mem.eql(u8, existing.?, content))
+        .unchanged
+    else
+        .updated;
+
+    if (result == .unchanged) {
+        // A hand-written file may be readable by the group/world; tighten it
+        // even when the contents are already up to date.
+        const maybe_file: ?std.Io.File = std.Io.Dir.cwd().openFile(io, path, .{}) catch null;
+        if (maybe_file) |file| {
+            defer file.close(io);
+            if (file.stat(io)) |st| {
+                if (st.permissions.toMode() & 0o077 != 0) {
+                    file.setPermissions(io, .fromMode(0o600)) catch {};
+                }
+            } else |_| {}
+        }
+    } else {
+        var atomic = try std.Io.Dir.cwd().createFileAtomic(io, path, .{
+            .permissions = .fromMode(0o600),
+            .make_path = true,
+            .replace = existing != null,
+        });
+        defer atomic.deinit(io);
+        try atomic.file.writeStreamingAll(io, content);
+        if (existing != null) {
+            try atomic.replace(io);
+        } else {
+            try atomic.link(io);
+        }
+    }
+
+    return result;
+}
+
+const EnvLine = struct { key: []const u8, value: []const u8 };
+
+fn parseEnvLine(raw: []const u8) ?EnvLine {
+    var line = std.mem.trim(u8, raw, " \t\r");
+    if (line.len == 0 or line[0] == '#' or line[0] == ';') return null;
+    if (std.mem.startsWith(u8, line, "export ")) line = std.mem.trimStart(u8, line[7..], " \t");
+    const eq = std.mem.indexOfScalar(u8, line, '=') orelse return null;
+    return .{
+        .key = std.mem.trim(u8, line[0..eq], " \t"),
+        .value = parseEnvValue(std.mem.trim(u8, line[eq + 1 ..], " \t")),
+    };
+}
+
+fn isSecretKey(key: []const u8) bool {
+    return std.mem.eql(u8, key, "PIMON_HTTP_SECRET") or std.mem.eql(u8, key, "PIMON_HTTP_TOKEN");
+}
+
+fn isPlaceholderSecret(value: []const u8) bool {
+    if (value.len == 0) return true;
+    return std.ascii.startsWithIgnoreCase(value, "replace") or
+        std.ascii.startsWithIgnoreCase(value, "change") or
+        std.ascii.startsWithIgnoreCase(value, "example") or
+        std.ascii.startsWithIgnoreCase(value, "your") or
+        value[0] == '<';
+}
+
+/// Last non-empty, non-placeholder secret in the file (either key spelling).
+fn findExistingSecret(existing: ?[]const u8) ?[]const u8 {
+    const text = existing orelse return null;
+    var found: ?[]const u8 = null;
+    var lines = std.mem.splitScalar(u8, text, '\n');
+    while (lines.next()) |raw| {
+        const kv = parseEnvLine(raw) orelse continue;
+        if (!isSecretKey(kv.key)) continue;
+        if (kv.value.len >= max_secret or isPlaceholderSecret(kv.value)) continue;
+        found = kv.value;
+    }
+    return found;
+}
+
+const config_header =
+    "# pimon control listener (generated by `pimon --gen-config`).\n" ++
+    "# Env-file syntax; re-run the command after upgrades to add new keys.\n" ++
+    "# The listener stays off unless PIMON_HTTP_ENABLED is truthy.\n" ++
+    "# Keep this file private: chmod 600.\n\n";
+
+/// Pure text rendering for `generateConfig` (unit-testable).
+fn renderConfig(gpa: Allocator, existing: ?[]const u8, generated_secret: []const u8) ![]u8 {
+    var out: std.Io.Writer.Allocating = .init(gpa);
+    defer out.deinit();
+    const w = &out.writer;
+
+    var has_enabled = false;
+    var has_bind = false;
+    var has_port = false;
+    var has_secret = false;
+    const secret = findExistingSecret(existing) orelse generated_secret;
+
+    if (existing) |text| {
+        const body = std.mem.trimEnd(u8, text, "\r\n");
+        var lines = std.mem.splitScalar(u8, body, '\n');
+        var first = true;
+        while (lines.next()) |raw| {
+            const line = std.mem.trimEnd(u8, raw, "\r");
+            if (!first) try w.writeByte('\n');
+            first = false;
+
+            if (parseEnvLine(line)) |kv| {
+                if (std.mem.eql(u8, kv.key, "PIMON_HTTP_ENABLED")) has_enabled = true;
+                if (std.mem.eql(u8, kv.key, "PIMON_HTTP_BIND")) has_bind = true;
+                if (std.mem.eql(u8, kv.key, "PIMON_HTTP_PORT")) has_port = true;
+                if (isSecretKey(kv.key)) {
+                    has_secret = true;
+                    // Canonicalise the spelling and replace placeholders.
+                    try w.print("PIMON_HTTP_SECRET={s}", .{secret});
+                } else {
+                    try w.writeAll(line);
+                }
+            } else {
+                try w.writeAll(line);
+            }
+        }
+    } else {
+        try w.writeAll(config_header);
+        try w.print("PIMON_HTTP_ENABLED=1\nPIMON_HTTP_BIND=127.0.0.1\nPIMON_HTTP_PORT=8717\nPIMON_HTTP_SECRET={s}\n", .{secret});
+        has_enabled = true;
+        has_bind = true;
+        has_port = true;
+        has_secret = true;
+    }
+
+    var added = false;
+    if (!has_enabled) try appendMissing(w, &added, "PIMON_HTTP_ENABLED=1");
+    if (!has_bind) try appendMissing(w, &added, "PIMON_HTTP_BIND=127.0.0.1");
+    if (!has_port) try appendMissing(w, &added, "PIMON_HTTP_PORT=8717");
+    if (!has_secret) {
+        // A file with no secret key at all: create one.
+        var buf: [80]u8 = undefined;
+        const line = std.fmt.bufPrint(&buf, "PIMON_HTTP_SECRET={s}", .{secret}) catch unreachable;
+        try appendMissing(w, &added, line);
+    }
+
+    const written = out.written();
+    if (written.len == 0 or written[written.len - 1] != '\n') try w.writeByte('\n');
+    return out.toOwnedSlice();
+}
+
+fn appendMissing(w: *std.Io.Writer, added: *bool, line: []const u8) !void {
+    if (!added.*) {
+        try w.writeAll("\n# added by pimon --gen-config\n");
+        added.* = true;
+    }
+    try w.writeAll(line);
+    try w.writeByte('\n');
 }
 
 // ---------------------------------------------------------------------------
@@ -535,13 +735,22 @@ fn handleConnection(server: *Server, stream: std.Io.net.Stream) !void {
         var req = http.receiveHead() catch return;
         const outcome = try handleRequest(server, &req);
         writer.interface.flush() catch return error.WriteFailed;
-        if (outcome == .close) return;
+        // A response that had to disable keep-alive (e.g. an unframed POST
+        // body) must end the connection here.
+        if (outcome == .close or !keepAliveAllowed(&req)) return;
     }
 }
 
 fn handleRequest(server: *Server, req: *std.http.Server.Request) !Outcome {
     const target = requestPath(req.head.target);
     const upgrade = req.upgradeRequested();
+
+    // Health is intentionally unauthenticated so a supervisor/other device can
+    // check liveness without holding the control token.
+    if (upgrade == .none and isHealthPath(target)) {
+        if (req.head.method != .GET) return methodNotAllowed(server, req, "GET");
+        return health(server, req);
+    }
 
     if (!server.authorized(req)) {
         try respondJson(server, req, .unauthorized, ErrorBody{ .@"error" = "missing or invalid bearer token" }, false, true);
@@ -565,10 +774,6 @@ fn handleRequest(server: *Server, req: *std.http.Server.Request) !Outcome {
         .none => {},
     }
 
-    if (std.mem.eql(u8, target, "/api/v1/health") or std.mem.eql(u8, target, "/healthz")) {
-        if (req.head.method != .GET) return methodNotAllowed(server, req, "GET");
-        return health(server, req);
-    }
     if (std.mem.eql(u8, target, "/api/v1/metrics")) {
         if (req.head.method != .GET) return methodNotAllowed(server, req, "GET");
         return metrics(server, req);
@@ -588,6 +793,22 @@ fn handleRequest(server: *Server, req: *std.http.Server.Request) !Outcome {
 fn requestPath(target: []const u8) []const u8 {
     const end = std.mem.indexOfScalar(u8, target, '?') orelse target.len;
     return target[0..end];
+}
+
+fn isHealthPath(target: []const u8) bool {
+    return std.mem.eql(u8, target, "/api/v1/health") or std.mem.eql(u8, target, "/healthz");
+}
+
+/// POST/PUT/etc. without a content-length or transfer-encoding has no body
+/// framing; `std.http.Server.respond` asserts if asked to drain one.
+fn requestBodyUnframed(req: *const std.http.Server.Request) bool {
+    return req.head.method.requestHasBody() and
+        req.head.transfer_encoding == .none and
+        req.head.content_length == null;
+}
+
+fn keepAliveAllowed(req: *const std.http.Server.Request) bool {
+    return req.head.keep_alive and !requestBodyUnframed(req);
 }
 
 const ErrorBody = struct { @"error": []const u8 };
@@ -621,6 +842,13 @@ fn metrics(server: *Server, req: *std.http.Server.Request) !Outcome {
 }
 
 fn enqueueBody(server: *Server, req: *std.http.Server.Request, want_action: bool) !Outcome {
+    // POST without content-length or transfer-encoding cannot be framed; the
+    // std server asserts if asked to drain it, so reject and close cleanly.
+    if (requestBodyUnframed(req)) {
+        try respondJson(server, req, .bad_request, ErrorBody{ .@"error" = "missing content-length" }, false, false);
+        return .close;
+    }
+
     var tmp: [16 * 1024]u8 = undefined;
     const r = req.readerExpectContinue(&tmp) catch {
         try respondJson(server, req, .bad_request, ErrorBody{ .@"error" = "cannot read request body" }, true, false);
@@ -673,10 +901,10 @@ fn methodNotAllowed(server: *Server, req: *std.http.Server.Request, allow: []con
     defer server.gpa.free(body);
     try req.respond(body, .{
         .status = .method_not_allowed,
-        .keep_alive = req.head.keep_alive,
+        .keep_alive = keepAliveAllowed(req),
         .extra_headers = &headers,
     });
-    return .keep;
+    return if (keepAliveAllowed(req)) .keep else .close;
 }
 
 const json_headers = [_]std.http.Header{
@@ -711,7 +939,7 @@ fn respondRaw(
     _ = server;
     try req.respond(body, .{
         .status = status,
-        .keep_alive = if (keep_alive) req.head.keep_alive else false,
+        .keep_alive = keep_alive and keepAliveAllowed(req),
         .extra_headers = if (with_auth) &auth_headers else &json_headers,
     });
 }
@@ -808,6 +1036,59 @@ test "env config: invalid values are rejected" {
     try std.testing.expectError(error.InvalidValue, parseConfigText("PIMON_HTTP_PORT=nope\n"));
 }
 
+test "renderConfig creates a complete config and is idempotent" {
+    const gpa = std.testing.allocator;
+    const fresh = try renderConfig(gpa, null, "deadbeef");
+    defer gpa.free(fresh);
+
+    try std.testing.expect(std.mem.startsWith(u8, fresh, "# pimon control listener"));
+    try std.testing.expect(std.mem.indexOf(u8, fresh, "PIMON_HTTP_ENABLED=1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fresh, "PIMON_HTTP_BIND=127.0.0.1") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fresh, "PIMON_HTTP_PORT=8717") != null);
+    try std.testing.expect(std.mem.indexOf(u8, fresh, "PIMON_HTTP_SECRET=deadbeef") != null);
+
+    const again = try renderConfig(gpa, fresh, "");
+    defer gpa.free(again);
+    try std.testing.expectEqualStrings(fresh, again);
+}
+
+test "renderConfig upgrades in place and preserves user values" {
+    const gpa = std.testing.allocator;
+    const existing =
+        \\# my settings
+        \\PIMON_HTTP_ENABLED=0
+        \\PIMON_HTTP_BIND=0.0.0.0
+        \\PIMON_HTTP_TOKEN=replace-me
+        \\CUSTOM=keep
+        \\
+    ;
+    const out = try renderConfig(gpa, existing, "0123456789abcdef");
+    defer gpa.free(out);
+
+    try std.testing.expect(std.mem.indexOf(u8, out, "# my settings") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PIMON_HTTP_ENABLED=0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PIMON_HTTP_BIND=0.0.0.0") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "CUSTOM=keep") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PIMON_HTTP_PORT=8717") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PIMON_HTTP_SECRET=0123456789abcdef") != null);
+    try std.testing.expect(std.mem.indexOf(u8, out, "PIMON_HTTP_TOKEN") == null);
+
+    // A real secret is kept, and the next run is a no-op.
+    const real = try renderConfig(gpa, "# c\nPIMON_HTTP_SECRET=keep-this-secret\n", "ignored");
+    defer gpa.free(real);
+    try std.testing.expect(std.mem.indexOf(u8, real, "PIMON_HTTP_SECRET=keep-this-secret") != null);
+    try std.testing.expect(findExistingSecret(real) != null);
+}
+
+test "findExistingSecret ignores placeholders and accepts the token alias" {
+    try std.testing.expect(findExistingSecret("# x\nPIMON_HTTP_ENABLED=1\n") == null);
+    try std.testing.expect(findExistingSecret("PIMON_HTTP_SECRET=replace-me\n") == null);
+    try std.testing.expectEqualStrings(
+        "real-token",
+        findExistingSecret("PIMON_HTTP_TOKEN='real-token'\n").?,
+    );
+}
+
 test "eventFromJson: scalar, series, bool and action" {
     const gpa = std.testing.allocator;
 
@@ -844,6 +1125,13 @@ test "eventFromJson: rejects malformed input" {
     for (bad) |body| {
         try std.testing.expectError(error.InvalidBody, eventFromJson(gpa, body));
     }
+}
+
+test "health paths are recognised" {
+    try std.testing.expect(isHealthPath("/api/v1/health"));
+    try std.testing.expect(isHealthPath("/healthz"));
+    try std.testing.expect(!isHealthPath("/api/v1/metrics"));
+    try std.testing.expect(!isHealthPath("/api/v1/health/extra"));
 }
 
 test "bearer digest comparison" {

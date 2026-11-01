@@ -152,6 +152,7 @@ zig build -Dgui=fb run -- \
 | `--no-drm-master` | set `SDL_KMSDRM_REQUIRE_DRM_MASTER=0` |
 | `--light` / `--dark` | colour scheme |
 | `--no-http` | disable the `~/.config/pimon.config` control listener |
+| `--gen-config` | create/upgrade `~/.config/pimon.config` and exit |
 
 The relevant SDL hints are applied before `SDL_Init`:
 
@@ -184,6 +185,7 @@ Build-time flags ( Zig `build` options, not runtime flags):
 | `--no-input`, `--keyboard PATH`, `--pointer PATH` | evdev input control |
 | `--no-console` | leave the VT in text mode |
 | `--no-http` | disable the `~/.config/pimon.config` control listener |
+| `--gen-config` | create/upgrade `~/.config/pimon.config` and exit |
 
 Keyboard controls (both backends): `Tab`/`Shift-Tab` move focus, `Enter`/`Space`
 activate, `Esc` or the Quit button exits.
@@ -192,7 +194,22 @@ activate, `Esc` or the Quit button exits.
 
 Both front-ends can expose a small REST + WebSocket API so another device can
 read live metrics or inject values into a `.layout.zon` screen.  It is **off by
-default** and configured from an env-file at `~/.config/pimon.config`:
+default** and configured from an env-file at `~/.config/pimon.config`.
+Generate one (with a random secret) or upgrade an existing file after pulling
+new keys:
+
+```sh
+./zig-out/bin/pimon-fb --gen-config    # or pimon-sdl on the SDL build
+```
+
+The command is idempotent and non-destructive: existing values (including
+`PIMON_HTTP_ENABLED=0`), comments and unknown keys are preserved, missing keys
+are appended (defaults: enabled, `127.0.0.1`, port `8717`), and an
+empty/placeholder secret is replaced with a fresh 32-byte token.  The file is written atomically with mode `0600`; a second run reports
+`unchanged`.  It needs no display and exits immediately.
+
+A commented template also lives in `pimon.config.example`, and the equivalent
+manual setup is:
 
 ```sh
 mkdir -p ~/.config
@@ -206,8 +223,6 @@ CONFIG
 chmod 600 ~/.config/pimon.config
 ```
 
-A commented template lives in `pimon.config.example`.
-
 | key | meaning |
 | --- | --- |
 | `PIMON_HTTP_ENABLED` | `1`/`true`/`on`/`yes` to start the listener (default off) |
@@ -218,14 +233,16 @@ A commented template lives in `pimon.config.example`.
 `#`/`;` comments, `export KEY=...`, blank lines and single/double quotes are
 accepted.  Pass `--no-http` to ignore the file for one run.
 
-The listener fails closed: with no secret it stays disabled.  Every request,
-including the WebSocket handshake, needs:
+The listener fails closed: with no secret it stays disabled.  Every request
+except health, including the WebSocket handshake, needs:
 
 ```
 Authorization: Bearer <PIMON_HTTP_SECRET>
 ```
 
 The token is compared via SHA-256 digests in constant time and is never logged.
+`GET /api/v1/health` (alias `/healthz`) is deliberately unauthenticated so a
+supervisor can check liveness without holding the token.
 
 > **Security:** there is no TLS.  Keep the default loopback bind, or put the
 > listener on a trusted LAN / behind an SSH tunnel (`ssh -L 8717:127.0.0.1:8717
@@ -237,7 +254,7 @@ The token is compared via SHA-256 digests in constant time and is never logged.
 TOKEN=$(grep PIMON_HTTP_SECRET ~/.config/pimon.config | cut -d= -f2-)
 BASE=http://127.0.0.1:8717/api/v1
 
-curl -H "Authorization: Bearer $TOKEN" $BASE/health
+curl $BASE/health                  # no token needed (alias: /healthz)
 curl -H "Authorization: Bearer $TOKEN" $BASE/metrics
 
 # inject a scalar into a gauge bound with bind_value="power.w"
@@ -257,7 +274,7 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
 
 | method | path | meaning |
 | --- | --- | --- |
-| GET | `/api/v1/health` | `{"ok":true,"uptime_s":...,"clients":...}` |
+| GET | `/api/v1/health` (alias `/healthz`) | `{"ok":true,"uptime_s":...,"clients":...}` — no token |
 | GET | `/api/v1/metrics` | latest metrics snapshot (JSON) |
 | POST | `/api/v1/data` | inject a number, boolean or numeric array |
 | POST | `/api/v1/action` | dispatch `reload_layout`, `quit`, or a custom action |
