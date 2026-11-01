@@ -26,7 +26,7 @@
 //! | GET  | `/api/v1/ws`      | WebSocket; text frames use the same JSON |
 //!
 //! `value` may be a number (float binding), a boolean (existing bool binding),
-//! or an array of numbers (sparkline series).  Accepted events are queued and
+//! a string (text binding), or an array of numbers (series binding).  Accepted events are queued and
 //! drained by the render loop with `poll`, so the HTTP threads never touch DVUI
 //! state directly.
 //!
@@ -428,6 +428,7 @@ pub const Event = union(enum) {
     set_float: struct { key: []u8, value: f32 },
     set_bool: struct { key: []u8, value: bool },
     set_series: struct { key: []u8, values: []f32 },
+    set_text: struct { key: []u8, value: []u8 },
     action: []u8,
 
     pub fn deinit(self: *Event, gpa: Allocator) void {
@@ -437,6 +438,10 @@ pub const Event = union(enum) {
             .set_series => |e| {
                 gpa.free(e.key);
                 gpa.free(e.values);
+            },
+            .set_text => |e| {
+                gpa.free(e.key);
+                gpa.free(e.value);
             },
             .action => |a| gpa.free(a),
         }
@@ -480,6 +485,11 @@ pub fn eventFromJson(gpa: Allocator, body: []const u8) !Event {
             return .{ .set_float = .{ .key = try gpa.dupe(u8, key), .value = @floatFromInt(i) } };
         },
         .bool => |b| return .{ .set_bool = .{ .key = try gpa.dupe(u8, key), .value = b } },
+        .string => |s| {
+            const owned_key = try gpa.dupe(u8, key);
+            errdefer gpa.free(owned_key);
+            return .{ .set_text = .{ .key = owned_key, .value = try gpa.dupe(u8, s) } };
+        },
         .array => |arr| {
             if (arr.items.len > max_series) return error.InvalidBody;
             const values = try gpa.alloc(f32, arr.items.len);
@@ -1106,6 +1116,11 @@ test "eventFromJson: scalar, series, bool and action" {
     defer b.deinit(gpa);
     try std.testing.expect(b.set_bool.value);
 
+    var t = try eventFromJson(gpa, "{\"key\":\"sys.host\",\"value\":\"pimon\"}");
+    defer t.deinit(gpa);
+    try std.testing.expectEqualStrings("sys.host", t.set_text.key);
+    try std.testing.expectEqualStrings("pimon", t.set_text.value);
+
     var a = try eventFromJson(gpa, "{\"action\":\"reload_layout\"}");
     defer a.deinit(gpa);
     try std.testing.expectEqualStrings("reload_layout", a.action);
@@ -1117,7 +1132,6 @@ test "eventFromJson: rejects malformed input" {
         "{}",
         "[]",
         "{\"key\":\"has space\",\"value\":1}",
-        "{\"key\":\"k\",\"value\":\"text\"}",
         "{\"key\":\"k\",\"value\":1e999}",
         "{\"key\":\"k\",\"value\":[1,\"x\"]}",
         "{\"action\":\"bad action\"}",

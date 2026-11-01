@@ -2,7 +2,8 @@
 //!
 //! Both arcs are drawn with the Canvas-style `arc.zig`, which gives them round
 //! ends.  The value arc changes colour past `yellow_at` / `red_at` of the full
-//! scale, matching the threshold markers drawn at the end of the sweep.
+//! scale.  Optional warning/danger bands can be drawn behind it with
+//! `show_thresholds`, but they are off unless a layout asks for them.
 //!
 //! This module only draws into a `RectScale` it is handed; putting a value and
 //! unit inside the ring with DVUI labels is left to the caller (`layout.zig`).
@@ -22,8 +23,9 @@ pub const Options = struct {
     /// Fraction of `max` where the value arc turns yellow / red.
     yellow_at: f32 = 0.78,
     red_at: f32 = 0.90,
-    /// Draw the yellow/red markers at the end of the sweep.
-    show_thresholds: bool = true,
+    /// Draw the yellow/red warning bands at the end of the sweep.  Off by
+    /// default; dashboards that want traffic-light zones opt in per gauge.
+    show_thresholds: bool = false,
     /// Ring thickness; `null` derives it from the scale factor.
     thickness: ?f32 = null,
     track: dvui.Color = palette.track,
@@ -69,9 +71,10 @@ pub fn drawRing(rs: dvui.RectScale, o: Options) void {
     // 1. background arc ...
     arc.arcWithCaps(cx, cy, radius, start, start + sweep, thickness, o.track);
 
-    // 2. threshold zones, layered on the same centre/radius/thickness as the
-    //    track.  Use the round-capped ring primitive so the short bands read
-    //    as arcs instead of square blocks, and keep them under the value arc.
+    // 2. optional warning/danger bands, layered on the same centre/radius/
+    //    thickness as the track.  They are opt-in so a plain meter stays
+    //    clean; use the round-capped ring primitive so the short bands read
+    //    as arcs instead of square blocks.
     if (o.show_thresholds) {
         const yellow_at = std.math.clamp(o.yellow_at, 0.0, 1.0);
         const red_at = std.math.clamp(o.red_at, 0.0, 1.0);
@@ -134,6 +137,11 @@ pub fn cell(id_extra: usize, title: []const u8, o: Options, unit: []const u8, wi
     if (unit.len > 0) {
         dvui.labelNoFmt(@src(), unit, .{ .align_x = 0.5 }, .{ .expand = .horizontal, .id_extra = id_extra });
     }
+}
+
+test "warning bands are opt-in" {
+    const o: Options = .{};
+    try std.testing.expect(!o.show_thresholds);
 }
 
 test "fraction clamps and thresholds" {

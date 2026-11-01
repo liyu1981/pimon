@@ -209,6 +209,14 @@ fn makeUiModules(
     });
     addTests(b, metrics_mod, test_step);
 
+    // Universal typed data values (pure std, shared by layout/net/metrics).
+    const data_mod = b.createModule(.{
+        .root_source_file = b.path("src/data.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addTests(b, data_mod, test_step);
+
     // Optional HTTP/WebSocket control listener (pure std, no DVUI).
     const net_mod = b.createModule(.{
         .root_source_file = b.path("src/net.zig"),
@@ -225,6 +233,7 @@ fn makeUiModules(
         .imports = &.{
             .{ .name = "dvui", .module = dvui_mod },
             .{ .name = "widgets", .module = widgets_mod },
+            .{ .name = "data", .module = data_mod },
         },
     });
     addTests(b, layout_mod, test_step);
@@ -240,6 +249,7 @@ fn makeUiModules(
             .{ .name = "layout", .module = layout_mod },
             .{ .name = "metrics", .module = metrics_mod },
             .{ .name = "net", .module = net_mod },
+            .{ .name = "data", .module = data_mod },
         },
     });
 

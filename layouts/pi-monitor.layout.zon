@@ -1,0 +1,108 @@
+// pimon system monitor.
+//
+//   ./pimon-fb --layout layouts/pi-monitor.layout.zon
+//
+// Live values are published from /proc every second (see
+// dashboard.publishMetrics).  Scalars feed `gauge` via `bind_value`, series
+// feed `sparkline` via `bind_data`, and `bind_text` labels show pre-formatted
+// system information.  Every binding declares its `bind_type` so the universal
+// data API rejects a local or remote value of the wrong kind.
+//
+// Keys used here:
+//   cpu.load1     cpu.util_pct  cpu.temp          (gauges)
+//   ram.used_pct                                  (gauge)
+//   net.rx_mbs    net.tx_mbs                      (gauges, MiB/s)
+//   cpu.load_hist                                 (sparkline)
+//   sys.host  sys.kernel  sys.cpu_model  sys.cpu
+//   sys.uptime  sys.load  sys.mem  sys.net_total  (text labels)
+
+.{
+    .component = .vbox,
+    .expand = .horizontal,
+    .padding = 8,
+    .children = .{
+
+        .{ .component = .title, .text = "pi-monitor" },
+        .{ .component = .separator },
+
+        // ---- primary gauges ---------------------------------------------
+        .{
+            .component = .hbox,
+            .expand = .horizontal,
+            .children = .{
+                .{ .component = .gauge, .text = "LOAD 1m", .bind_value = "cpu.load1", .bind_type = .float, .max = 4.0, .unit = "load", .color = "green", .width = 180.0, .height = 95.0 },
+                .{ .component = .gauge, .text = "CPU UTIL", .bind_value = "cpu.util_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "cyan", .width = 180.0, .height = 95.0 },
+                .{ .component = .gauge, .text = "CPU TEMP", .bind_value = "cpu.temp", .bind_type = .float, .max = 80.0, .unit = "°C", .color = "orange", .width = 180.0, .height = 95.0 },
+                .{ .component = .gauge, .text = "RAM USED", .bind_value = "ram.used_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "lime", .width = 180.0, .height = 95.0 },
+            },
+        },
+
+        .{ .component = .separator },
+
+        // ---- load history + network -------------------------------------
+        .{
+            .component = .hbox,
+            .expand = .horizontal,
+            .children = .{
+                .{
+                    .component = .vbox,
+                    .expand = .horizontal,
+                    .children = .{
+                        .{ .component = .heading, .text = "LOAD HISTORY (48 s)" },
+                        .{ .component = .sparkline, .bind_data = "cpu.load_hist", .bind_type = .series, .color = "cyan", .height = 45.0, .width = 400.0 },
+                        .{ .component = .label, .bind_text = "sys.load", .bind_type = .text },
+                    },
+                },
+                .{
+                    .component = .vbox,
+                    .children = .{
+                        .{ .component = .heading, .text = "NETWORK" },
+                        .{
+                            .component = .hbox,
+                            .children = .{
+                                .{ .component = .gauge, .text = "DOWN", .bind_value = "net.rx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "green", .width = 145.0, .height = 80.0 },
+                                .{ .component = .gauge, .text = "UP", .bind_value = "net.tx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "blue", .width = 145.0, .height = 80.0 },
+                            },
+                        },
+                        .{ .component = .label, .bind_text = "sys.net_total", .bind_type = .text },
+                    },
+                },
+            },
+        },
+
+        .{ .component = .separator },
+
+        // ---- system information -----------------------------------------
+        .{ .component = .heading, .text = "SYSTEM" },
+        .{
+            .component = .hbox,
+            .expand = .horizontal,
+            .children = .{
+                .{
+                    .component = .vbox,
+                    .expand = .horizontal,
+                    .children = .{
+                        .{ .component = .label, .bind_text = "sys.host", .bind_type = .text },
+                        .{ .component = .label, .bind_text = "sys.kernel", .bind_type = .text },
+                    },
+                },
+                .{
+                    .component = .vbox,
+                    .expand = .horizontal,
+                    .children = .{
+                        .{ .component = .label, .bind_text = "sys.cpu_model", .bind_type = .text },
+                        .{ .component = .label, .bind_text = "sys.cpu", .bind_type = .text },
+                    },
+                },
+                .{
+                    .component = .vbox,
+                    .expand = .horizontal,
+                    .children = .{
+                        .{ .component = .label, .bind_text = "sys.mem", .bind_type = .text },
+                        .{ .component = .label, .bind_text = "sys.uptime", .bind_type = .text },
+                    },
+                },
+            },
+        },
+    },
+}

@@ -265,7 +265,9 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
      -d '{"key":"power.history","value":[3,5,2,8,6,9]}' $BASE/data
 
-# set an existing checkbox binding, or dispatch an app action
+# inject text into a bind_text label, set a checkbox, or dispatch an action
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+     -d '{"key":"remote.status","value":"online"}' $BASE/data
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
      -d '{"key":"demo.animate","value":false}' $BASE/data
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
@@ -276,16 +278,17 @@ curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/jso
 | --- | --- | --- |
 | GET | `/api/v1/health` (alias `/healthz`) | `{"ok":true,"uptime_s":...,"clients":...}` — no token |
 | GET | `/api/v1/metrics` | latest metrics snapshot (JSON) |
-| POST | `/api/v1/data` | inject a number, boolean or numeric array |
+| POST | `/api/v1/data` | inject a number, boolean, string or numeric array |
 | POST | `/api/v1/action` | dispatch `reload_layout`, `quit`, or a custom action |
 | GET | `/api/v1/ws` | WebSocket upgrade |
 
-`value` selects the binding kind: number -> float gauge, boolean -> an already
-registered checkbox, array of numbers -> sparkline series.  Keys are limited to
+`value` selects the binding kind: number -> float, boolean -> an already
+registered checkbox, string -> text, array of numbers -> series.  Keys are limited to
 `A-Za-z0-9._-` (max 128 bytes), series to 512 samples, request bodies to 64 KiB.
-Injected values are copied into the layout bindings; keys published from `/proc`
-(`cpu.load_pct`, `ram.used_pct`, ...) are refreshed every second and therefore
-override injected values for those names.
+Injected values are copied into the layout bindings and validated against the
+layout's `bind_type` declarations (a mismatch is dropped).  Keys published from
+`/proc` (`cpu.load_pct`, `ram.used_pct`, ...) are refreshed every second and
+therefore override injected values for those names.
 
 ### WebSocket
 
@@ -332,11 +335,14 @@ Only adding a brand-new *component kind* or *property* touches `src/layout.zig`.
 | `.checkbox` | bound to a boolean via `bind` |
 | `.separator` | divider |
 | `.spacer` | fixed `width` / `height` gap |
-| `.gauge` | radial arc meter (270° track + threshold markers + value arc) with the value and unit centred |
+| `.gauge` | radial arc meter (270° track + value arc + optional warning bands) with the value and unit centred |
 | `.sparkline` | small line chart of a numeric series |
 
-Common properties: `text`, `expand` (`.none`/`.horizontal`/`.vertical`/`.both`),
-`bind`, `action`, `padding`, `width`, `height`, `color`, `children`.
+Common properties: `text`, `bind_text` (live text for
+`label`/`title`/`heading`/`button`, wins over `text`), `bind_type`
+(`.float`/`.series`/`.text`/`.boolean`; optional, inferred from the binding
+field), `expand` (`.none`/`.horizontal`/`.vertical`/`.both`), `bind`, `action`,
+`padding`, `width`, `height`, `color`, `children`.
 
 ### `gauge`
 
@@ -347,10 +353,12 @@ Common properties: `text`, `expand` (`.none`/`.horizontal`/`.vertical`/`.both`),
 | `max` | full scale (default 100) |
 | `unit` | suffix under the value (`%`, `°C`, `W`) |
 | `color` | accent colour: `green`/`lime`/`red`/`yellow`/`orange`/`cyan`/`blue`/`white`/`gray`, or hex `rrggbb`/`aarrggbb` |
-| `text` | (not used — put a `.label`/`.heading` above the gauge for the card title) |
+| `show_thresholds` | draw the yellow/red warning bands (default `false`) |
+| `text` | gauge title, drawn above the ring |
 
-The value arc turns **yellow near 78 %** and **red near 90 %** of `max`, matching
-the threshold markers drawn at the end of the sweep.
+The value arc turns **yellow near 78 %** and **red near 90 %** of `max`.  The
+warning/danger bands on the track are optional and **off by default**; set
+`.show_thresholds = true` on a gauge that wants them.
 
 ### `sparkline`
 
@@ -360,27 +368,48 @@ the threshold markers drawn at the end of the sweep.
 | `bind_data` | **live** series key (wins over `data`) |
 | `color` | accent colour (same names/hex as `gauge`) |
 
+### Typed data API
+
+Every binding has a kind: `.float`, `.series`, `.text`, or `.boolean`.
+`bind_type` is optional and inferred from `bind_value` / `bind_data` /
+`bind_text` / `bind`; the `pi-monitor` layout declares it explicitly.  Both
+local `/proc` metrics (`dashboard.publishMetrics`) and HTTP/WebSocket
+injections flow through the same `src/data.zig` API (`data.Value` +
+`Bindings.publish` / `publishOwned`).  A publication whose kind does not match
+the layout declaration is logged and dropped — e.g. a remote float cannot
+overwrite the text binding `sys.host`.
+
 ### Live data keys
 
-The app publishes metrics from `/proc` each frame (`dashboard.publishMetrics`),
-so a layout can bind to them without any code change:
+The app publishes metrics from `/proc` each frame, so a layout can bind to them
+without any code change.  Everything below is `.float` except `cpu.load_hist`
+(`.series`) and the `sys.*` keys (`.text`):
 
 | key | meaning |
 | --- | --- |
 | `cpu.load_pct` | 1-min load average as % of CPU count |
 | `cpu.load1` / `cpu.load5` / `cpu.load15` | raw load averages |
 | `cpu.count` | logical CPU count |
+| `cpu.util_pct` | actual CPU busy % since the previous sample |
 | `cpu.temp` / `cpu.temp_max` | CPU temperature (°C) and its 80 °C scale hint |
 | `ram.used_mb` / `ram.total_mb` / `ram.used_pct` | memory usage |
+| `net.rx_kbs` / `net.tx_kbs` | default-interface throughput (KiB/s) |
+| `net.rx_mbs` / `net.tx_mbs` | default-interface throughput (MiB/s) |
+| `net.rx_total_mb` / `net.tx_total_mb` | bytes since boot (MiB) |
 | `cpu.load_hist` | series: last 48 one-second load samples |
+| `sys.host` / `sys.kernel` / `sys.cpu_model` / `sys.cpu` | text: hostname, kernel, CPU model, core count |
+| `sys.uptime` / `sys.load` / `sys.mem` | text: uptime, load averages, memory use |
+| `sys.net` / `sys.net_total` | text: interface + throughput / interface + totals |
 
 ```sh
-./zig-out/bin/pimon-fb --layout layouts/monitor.layout.zon   # gauges + sparklines
+./zig-out/bin/pimon-fb --layout layouts/pi-monitor.layout.zon   # gauges + sparklines
 ./zig-out/bin/pimon-fb --layout layouts/dashboard.layout.zon # plain widgets
 ```
 
-See `layouts/monitor.layout.zon` for a hardware-monitor screen that looks like a
-radial-gauge dashboard.
+`layouts/pi-monitor.layout.zon` is the full system monitor: CPU load, CPU
+utilisation, temperature, RAM, network down/up gauges, load history, and a
+system-information panel (hostname, kernel, CPU model, uptime, load, memory,
+network totals).
 
 ### Reusable widgets (usable without the layout engine)
 

@@ -9,6 +9,7 @@ const metrics = @import("metrics");
 const widgets = @import("widgets");
 const layout_mod = @import("layout");
 const net = @import("net");
+const data = @import("data");
 
 pub const Channel = struct { bits: u8 = 0, offset: u8 = 0 };
 
@@ -154,29 +155,60 @@ pub fn frame(m: *metrics.SystemMetrics, c: *Controls, info: DisplayInfo) !dvui.A
 /// | `cpu.load_pct` | load average 1min as % of CPU count (0..100) |
 /// | `cpu.load1` / `cpu.load5` / `cpu.load15` | raw load averages |
 /// | `cpu.count` | logical CPU count |
+/// | `cpu.util_pct` | actual CPU busy % since the previous sample |
 /// | `cpu.temp` | CPU temperature in °C |
 /// | `cpu.temp_max` | scale hint for the temp gauge (80 °C) |
 /// | `ram.used_mb` / `ram.total_mb` / `ram.used_pct` | memory usage |
+/// | `net.rx_kbs` / `net.tx_kbs` | default-interface throughput (KiB/s) |
+/// | `net.rx_mbs` / `net.tx_mbs` | default-interface throughput (MiB/s) |
+/// | `net.rx_total_mb` / `net.tx_total_mb` | bytes since boot (MiB) |
 /// | `cpu.load_hist` | series: last 48 one-second load samples |
+/// | `sys.host` / `sys.kernel` / `sys.cpu` / `sys.cpu_model` | text |
+/// | `sys.uptime` / `sys.load` / `sys.mem` / `sys.net` / `sys.net_total` | text |
 pub fn publishMetrics(gpa: std.mem.Allocator, b: *layout_mod.Bindings, m: *metrics.SystemMetrics) void {
     const ncpu: f32 = @floatFromInt(@max(1, m.cpu_count));
-    b.setFloat(gpa, "cpu.count", ncpu) catch {};
-    b.setFloat(gpa, "cpu.load1", m.load[0]) catch {};
-    b.setFloat(gpa, "cpu.load5", m.load[1]) catch {};
-    b.setFloat(gpa, "cpu.load15", m.load[2]) catch {};
-    b.setFloat(gpa, "cpu.load_pct", std.math.clamp(m.load[0] / ncpu * 100.0, 0, 100)) catch {};
-    b.setFloat(gpa, "cpu.temp", m.temp_c) catch {};
-    b.setFloat(gpa, "cpu.temp_max", 80.0) catch {};
-
     const used_kb: f32 = @floatFromInt(m.mem_total_kb -| m.mem_avail_kb);
     const total_kb: f32 = @floatFromInt(m.mem_total_kb);
-    b.setFloat(gpa, "ram.used_mb", used_kb / 1024.0) catch {};
-    b.setFloat(gpa, "ram.total_mb", total_kb / 1024.0) catch {};
-    b.setFloat(gpa, "ram.used_pct", if (total_kb > 0) used_kb / total_kb * 100.0 else 0) catch {};
+
+    // Local data uses the same typed API as remote injections: every value is
+    // a `data.Value`, and a declared layout type can reject a mismatch.
+    put(b, gpa, "cpu.count", .{ .float = ncpu });
+    put(b, gpa, "cpu.load1", .{ .float = m.load[0] });
+    put(b, gpa, "cpu.load5", .{ .float = m.load[1] });
+    put(b, gpa, "cpu.load15", .{ .float = m.load[2] });
+    put(b, gpa, "cpu.load_pct", .{ .float = std.math.clamp(m.load[0] / ncpu * 100.0, 0, 100) });
+    put(b, gpa, "cpu.util_pct", .{ .float = m.cpu_util_pct });
+    put(b, gpa, "cpu.temp", .{ .float = m.temp_c });
+    put(b, gpa, "cpu.temp_max", .{ .float = 80.0 });
+
+    put(b, gpa, "ram.used_mb", .{ .float = used_kb / 1024.0 });
+    put(b, gpa, "ram.total_mb", .{ .float = total_kb / 1024.0 });
+    put(b, gpa, "ram.used_pct", .{ .float = if (total_kb > 0) used_kb / total_kb * 100.0 else 0 });
+
+    put(b, gpa, "net.rx_kbs", .{ .float = m.net_rx_kbs });
+    put(b, gpa, "net.tx_kbs", .{ .float = m.net_tx_kbs });
+    put(b, gpa, "net.rx_mbs", .{ .float = m.net_rx_kbs / 1024.0 });
+    put(b, gpa, "net.tx_mbs", .{ .float = m.net_tx_kbs / 1024.0 });
+    put(b, gpa, "net.rx_total_mb", .{ .float = @as(f32, @floatFromInt(m.net_rx_total)) / 1024.0 / 1024.0 });
+    put(b, gpa, "net.tx_total_mb", .{ .float = @as(f32, @floatFromInt(m.net_tx_total)) / 1024.0 / 1024.0 });
+
+    put(b, gpa, "sys.host", .{ .text = std.mem.sliceTo(&m.hostname, 0) });
+    put(b, gpa, "sys.kernel", .{ .text = std.mem.sliceTo(&m.kernel, 0) });
+    put(b, gpa, "sys.cpu_model", .{ .text = std.mem.sliceTo(&m.cpu_model, 0) });
+    put(b, gpa, "sys.cpu", .{ .text = std.mem.sliceTo(&m.cpu_text, 0) });
+    put(b, gpa, "sys.uptime", .{ .text = std.mem.sliceTo(&m.uptime_text, 0) });
+    put(b, gpa, "sys.load", .{ .text = std.mem.sliceTo(&m.load_text, 0) });
+    put(b, gpa, "sys.mem", .{ .text = std.mem.sliceTo(&m.mem_text, 0) });
+    put(b, gpa, "sys.net", .{ .text = std.mem.sliceTo(&m.net_text, 0) });
+    put(b, gpa, "sys.net_total", .{ .text = std.mem.sliceTo(&m.net_total_text, 0) });
 
     if (m.loadHistory().len > 1) {
-        b.setSeries(gpa, "cpu.load_hist", m.loadHistory()) catch {};
+        put(b, gpa, "cpu.load_hist", .{ .series = m.loadHistory() });
     }
+}
+
+fn put(b: *layout_mod.Bindings, gpa: std.mem.Allocator, key: []const u8, value: data.Value) void {
+    _ = b.publish(gpa, key, value) catch {};
 }
 
 /// Render a `.layout.zon` driven screen instead of the built-in dashboard.
@@ -247,13 +279,18 @@ pub fn applyNetEvent(
     ev: *const net.Event,
 ) ?[]const u8 {
     switch (ev.*) {
-        .set_float => |e| bindings.setFloatOwned(gpa, e.key, e.value) catch {},
-        .set_bool => |e| {
-            if (!bindings.setBool(e.key, e.value)) {
-                std.log.debug("net: no bool binding named '{s}'", .{e.key});
-            }
+        .set_float => |e| {
+            _ = bindings.publishOwned(gpa, e.key, .{ .float = e.value }) catch false;
         },
-        .set_series => |e| bindings.setSeriesOwned(gpa, e.key, e.values) catch {},
+        .set_bool => |e| {
+            _ = bindings.publishOwned(gpa, e.key, .{ .boolean = e.value }) catch false;
+        },
+        .set_series => |e| {
+            _ = bindings.publishOwned(gpa, e.key, .{ .series = e.values }) catch false;
+        },
+        .set_text => |e| {
+            _ = bindings.publishOwned(gpa, e.key, .{ .text = e.value }) catch false;
+        },
         .action => |a| return a,
     }
     return null;
@@ -292,10 +329,14 @@ const Snapshot = struct {
     load_5: f32,
     load_15: f32,
     cpu_count: u32,
+    cpu_util_pct: f32,
     cpu_temp_c: f32,
     mem_used_mb: f32,
     mem_total_mb: f32,
     mem_used_pct: f32,
+    net_iface: []const u8,
+    net_rx_kbs: f32,
+    net_tx_kbs: f32,
     fps: f32,
     load_hist: []const f32,
     display: struct {
@@ -319,10 +360,14 @@ pub fn snapshotJson(gpa: std.mem.Allocator, m: *const metrics.SystemMetrics, inf
         .load_5 = m.load[1],
         .load_15 = m.load[2],
         .cpu_count = m.cpu_count,
+        .cpu_util_pct = m.cpu_util_pct,
         .cpu_temp_c = m.temp_c,
         .mem_used_mb = used_kb / 1024.0,
         .mem_total_mb = total_kb / 1024.0,
         .mem_used_pct = if (total_kb > 0) used_kb / total_kb * 100.0 else 0,
+        .net_iface = std.mem.sliceTo(&m.net_iface, 0),
+        .net_rx_kbs = m.net_rx_kbs,
+        .net_tx_kbs = m.net_tx_kbs,
         .fps = m.fps,
         .load_hist = m.loadHistory(),
         .display = .{
