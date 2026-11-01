@@ -19,13 +19,15 @@ const TIMER_ID: c.UINT_PTR = 1;
 const IDC_ARROW: [*:0]const u16 = @ptrFromInt(32512);
 const IDI_APPLICATION: [*:0]const u16 = @ptrFromInt(32512);
 
-const ID_START: usize = 1001;
-const ID_STOP: usize = 1002;
-const ID_SAVE: usize = 1003;
-const ID_RELOAD: usize = 1004;
-const ID_HIDE: usize = 1005;
-const ID_EXIT: usize = 1006;
-const ID_OPEN: usize = 1007;
+// HMENU is a C pointer type with 4-byte alignment in the translated headers;
+// child control IDs must therefore be aligned when passed as @ptrFromInt.
+const ID_START: usize = 1000;
+const ID_STOP: usize = 1004;
+const ID_SAVE: usize = 1008;
+const ID_RELOAD: usize = 1012;
+const ID_HIDE: usize = 1016;
+const ID_EXIT: usize = 1020;
+const ID_OPEN: usize = 1024;
 
 const App = struct {
     io: std.Io,
@@ -58,47 +60,141 @@ const App = struct {
 
 var app: App = undefined;
 
-pub fn main(init: std.process.Init) !void {
-    app.io = init.io;
-    app.gpa = init.gpa;
-    app.environ = init.environ_map;
-    app.log = LogBuffer.init(init.io);
+pub var console_debug: bool = false;
 
+fn debugLog(comptime fmt: []const u8, args: anytype) void {
+    var msg_buf: [512]u8 = undefined;
+    const msg = std.fmt.bufPrint(&msg_buf, fmt, args) catch return;
+    if (console_debug) std.debug.print("{s}", .{msg});
+
+    var path_buf: [c.MAX_PATH + 32]u16 = @splat(0);
+    const base_len = c.GetTempPathW(path_buf.len, &path_buf);
+    if (base_len == 0 or base_len >= path_buf.len) return;
+    const name: []const u16 = std.unicode.utf8ToUtf16LeStringLiteral("pimon-agent-win11.log");
+    if (@as(usize, base_len) + name.len + 1 > path_buf.len) return;
+    @memcpy(path_buf[base_len .. base_len + name.len], name);
+    path_buf[base_len + name.len] = 0;
+
+    const handle = c.CreateFileW(
+        &path_buf,
+        c.FILE_APPEND_DATA,
+        c.FILE_SHARE_READ | c.FILE_SHARE_WRITE,
+        null,
+        c.OPEN_ALWAYS,
+        c.FILE_ATTRIBUTE_NORMAL,
+        null,
+    ) orelse return;
+    if (@intFromPtr(handle) == std.math.maxInt(usize)) return;
+    defer _ = c.CloseHandle(handle);
+    var written: c.DWORD = 0;
+    _ = c.WriteFile(handle, msg.ptr, @intCast(msg.len), &written, null);
+}
+
+fn unhandledException(info: c.PEXCEPTION_POINTERS) callconv(.c) c.LONG {
+    if (info != null) {
+        if (info.*.ExceptionRecord != null) {
+            const rec = info.*.ExceptionRecord.*;
+            debugLog("UNHANDLED EXCEPTION code=0x{x} address=0x{x} params={d}\n", .{
+                rec.ExceptionCode,
+                @intFromPtr(rec.ExceptionAddress),
+                rec.NumberParameters,
+            });
+        }
+    }
+    return c.EXCEPTION_CONTINUE_SEARCH;
+}
+
+pub export fn wWinMain(
+    hInstance: *anyopaque,
+    hPrevInstance: ?*anyopaque,
+    pCmdLine: [*:0]u16,
+    nCmdShow: c_int,
+) callconv(.c) c_int {
+    _ = hInstance;
+    _ = hPrevInstance;
+    _ = pCmdLine;
+    _ = nCmdShow;
+    _ = c.SetUnhandledExceptionFilter(unhandledException);
+    debugLog("wWinMain entered\n", .{});
+
+    const gpa = std.heap.smp_allocator;
+    const args_vec = std.os.windows.peb().ProcessParameters.CommandLine.slice();
+    var threaded: std.Io.Threaded = .init(gpa, .{
+        .argv0 = .init(.{ .vector = args_vec }),
+        .environ = .{ .block = .global },
+    });
+    const io = threaded.io();
+    debugLog("Io initialized\n", .{});
+
+    var environ_map = std.process.Environ.createMap(.{ .block = .global }, gpa) catch {
+        _ = c.MessageBoxW(
+            null,
+            std.unicode.utf8ToUtf16LeStringLiteral("Cannot read the process environment."),
+            window_title,
+            c.MB_OK | c.MB_ICONERROR,
+        );
+        return 1;
+    };
+
+    debugLog("environment map ready, entering run\n", .{});
+    return run(io, gpa, &environ_map, args_vec);
+}
+
+pub fn run(
+    io: std.Io,
+    gpa: std.mem.Allocator,
+    environ: *const std.process.Environ.Map,
+    args_vec: []const u16,
+) c_int {
+    app.io = io;
+    app.gpa = gpa;
+    app.environ = environ;
+    app.log = LogBuffer.init(io);
+
+    debugLog("run started\n", .{});
     var args = Args{};
-    args.parse(init) catch |err| {
+    args.parse(.{ .vector = args_vec }, gpa) catch |err| {
         messageBoxf("pimon-agent-win11", "Invalid arguments: {s}", .{@errorName(err)});
-        return;
+        return 2;
     };
     if (args.help) {
         messageBox("pimon-agent-win11", usage_text);
-        return;
+        return 0;
     }
 
-    const path = config.resolvePath(init.environ_map, args.config_path, &app.path_buf) catch |err| {
+    const path = config.resolvePath(environ, args.config_path, &app.path_buf) catch |err| {
         messageBoxf("pimon-agent-win11", "Cannot resolve config path: {s}", .{@errorName(err)});
-        return;
+        return 2;
     };
     app.path_len = path.len;
+    debugLog("config path: {s}\n", .{path});
 
     if (args.install_config) {
         installConfig();
-        return;
+        return 0;
     }
 
     if (args.once) {
         runOnceMode();
-        return;
+        return 0;
     }
 
-    if (!createWindow()) return;
-
+    if (!createWindow()) {
+        debugLog("createWindow failed\n", .{});
+        return 1;
+    }
+    debugLog("window created\n", .{});
     loadEditorFromDisk();
     const started = startFromEditor(false);
+    debugLog("startFromEditor={s} tray={s}\n", .{ if (started) "true" else "false", if (app.tray_added) "true" else "false" });
     if (args.show or !started or !app.tray_added) {
         showWindow();
     }
 
+    debugLog("entering message loop\n", .{});
     messageLoop();
+    debugLog("message loop exited\n", .{});
+    return 0;
 }
 
 fn messageLoop() void {
@@ -126,9 +222,11 @@ fn createWindow() bool {
     wc.hbrBackground = @ptrCast(@alignCast(c.GetStockObject(c.WHITE_BRUSH)));
     wc.lpszClassName = class_name;
     if (c.RegisterClassExW(&wc) == 0) {
+        debugLog("RegisterClassExW failed\n", .{});
         messageBox("pimon-agent-win11", "Cannot register the window class.");
         return false;
     }
+    debugLog("window class registered\n", .{});
 
     app.hwnd = c.CreateWindowExW(
         0,
@@ -145,15 +243,23 @@ fn createWindow() bool {
         null,
     );
     if (app.hwnd == null) {
+        debugLog("CreateWindowExW failed\n", .{});
         messageBox("pimon-agent-win11", "Cannot create the main window.");
         return false;
     }
+    debugLog("main window handle created\n", .{});
 
+    debugLog("createControls begin\n", .{});
     createControls();
+    debugLog("createControls done\n", .{});
     layoutControls();
+    debugLog("layoutControls done\n", .{});
     _ = c.SetTimer(app.hwnd, TIMER_ID, 250, null);
+    debugLog("timer set\n", .{});
     updateStatus();
+    debugLog("status updated\n", .{});
     addTrayIcon();
+    debugLog("tray_added={s}\n", .{if (app.tray_added) "true" else "false"});
     return true;
 }
 
@@ -162,11 +268,17 @@ fn createControls() void {
     const inst = app.instance;
 
     app.hstart = makeButton(parent, inst, "Start", ID_START);
+    debugLog("start button\n", .{});
     app.hstop = makeButton(parent, inst, "Stop", ID_STOP);
+    debugLog("stop button\n", .{});
     _ = makeButton(parent, inst, "Save Config", ID_SAVE);
+    debugLog("save button\n", .{});
     _ = makeButton(parent, inst, "Reload", ID_RELOAD);
+    debugLog("reload button\n", .{});
     _ = makeButton(parent, inst, "Hide", ID_HIDE);
+    debugLog("hide button\n", .{});
     _ = makeButton(parent, inst, "Exit", ID_EXIT);
+    debugLog("exit button\n", .{});
 
     app.hstatus = c.CreateWindowExW(
         0,
@@ -183,9 +295,12 @@ fn createControls() void {
         null,
     );
     setFont(app.hstatus, false);
+    debugLog("status control\n", .{});
 
     app.cfg_label = makeLabel(parent, inst, "Configuration");
+    debugLog("config label\n", .{});
     app.log_label = makeLabel(parent, inst, "Log");
+    debugLog("log label\n", .{});
 
     app.hcfg = c.CreateWindowExW(
         c.WS_EX_CLIENTEDGE,
@@ -203,6 +318,7 @@ fn createControls() void {
         null,
     );
     setFont(app.hcfg, true);
+    debugLog("config edit\n", .{});
 
     app.hlog = c.CreateWindowExW(
         c.WS_EX_CLIENTEDGE,
@@ -220,6 +336,7 @@ fn createControls() void {
         null,
     );
     setFont(app.hlog, true);
+    debugLog("log edit\n", .{});
 }
 
 fn makeButton(parent: c.HWND, inst: c.HINSTANCE, text: []const u8, id: usize) c.HWND {
@@ -274,6 +391,7 @@ fn setFont(h: c.HWND, fixed: bool) void {
 }
 
 fn layoutControls() void {
+    debugLog("layout enter\n", .{});
     if (app.hwnd == null) return;
     var rc: c.RECT = undefined;
     if (c.GetClientRect(app.hwnd, &rc) == 0) return;
@@ -308,6 +426,7 @@ fn layoutControls() void {
     const log_y = cfg_y + cfg_h + 30;
     _ = c.MoveWindow(app.log_label, pad, log_y, 100, 18, 1);
     _ = c.MoveWindow(app.hlog, pad, log_y + 20, width - 2 * pad, @max(60, height - log_y - 28), 1);
+    debugLog("layout done\n", .{});
 }
 
 /// Buttons are not stored individually; locate them by ID via GetDlgItem.
@@ -385,9 +504,11 @@ fn handleCommand(id: usize) void {
 }
 
 fn showWindow() void {
+    debugLog("showWindow\n", .{});
     if (app.hwnd == null) return;
     _ = c.ShowWindow(app.hwnd, c.SW_SHOW);
     _ = c.SetForegroundWindow(app.hwnd);
+    debugLog("showWindow done\n", .{});
 }
 
 fn hideWindow() void {
@@ -396,6 +517,7 @@ fn hideWindow() void {
 }
 
 fn addTrayIcon() void {
+    debugLog("tray add enter\n", .{});
     if (app.hwnd == null) return;
     var nid: c.NOTIFYICONDATAW = std.mem.zeroes(c.NOTIFYICONDATAW);
     nid.cbSize = @sizeOf(c.NOTIFYICONDATAW);
@@ -406,9 +528,11 @@ fn addTrayIcon() void {
     nid.hIcon = c.LoadIconW(null, IDI_APPLICATION);
     const tip: []const u16 = std.unicode.utf8ToUtf16LeStringLiteral("pimon-agent-win11");
     @memcpy(nid.szTip[0..tip.len], tip);
+    debugLog("tray notify call\n", .{});
     if (c.Shell_NotifyIconW(c.NIM_ADD, &nid) != 0) {
         app.tray_added = true;
     }
+    debugLog("tray notify done\n", .{});
 }
 
 fn removeTrayIcon() void {
@@ -449,17 +573,22 @@ fn updateStatus() void {
 }
 
 fn refreshLogs() void {
+    debugLog("refreshLogs enter\n", .{});
     if (app.hlog == null) return;
     var out: std.ArrayList(u8) = .empty;
     defer out.deinit(app.gpa);
     const total = app.log.snapshot(app.gpa, &out);
+    debugLog("refreshLogs snapshot total={d} bytes={d}\n", .{ total, out.items.len });
     if (total == app.log_seen) return;
     setWindowTextUtf8(app.hlog, out.items);
+    debugLog("refreshLogs text set\n", .{});
     app.log_seen = total;
     const end_w: c.WPARAM = @bitCast(@as(isize, -1));
     const end_l: c.LPARAM = -1;
     _ = c.SendMessageW(app.hlog, c.EM_SETSEL, end_w, end_l);
+    debugLog("refreshLogs selection set\n", .{});
     _ = c.SendMessageW(app.hlog, c.EM_SCROLLCARET, 0, 0);
+    debugLog("refreshLogs done\n", .{});
 }
 
 fn loadEditorFromDisk() void {
@@ -467,16 +596,24 @@ fn loadEditorFromDisk() void {
         app.log.logf("cannot read config: {s}", .{@errorName(err)});
         break :blk null;
     };
+    debugLog("loadEditor readRaw done\n", .{});
     if (raw) |text| {
         defer app.gpa.free(text);
+        debugLog("config bytes={d}\n", .{text.len});
         setWindowTextUtf8(app.hcfg, text);
+        debugLog("config editor set\n", .{});
+        debugLog("before app.log config loaded\n", .{});
         app.log.logf("config loaded: {s}", .{app.path()});
+        debugLog("after app.log config loaded\n", .{});
     } else {
         setWindowTextUtf8(app.hcfg, config.template);
+        debugLog("config template set\n", .{});
         app.log.logf("config not found: {s}", .{app.path()});
     }
+    debugLog("before refreshLogs after editor load\n", .{});
     app.log_seen = 0;
     refreshLogs();
+    debugLog("loadEditor done\n", .{});
 }
 
 fn saveEditor() bool {
@@ -494,11 +631,13 @@ fn saveEditor() bool {
 }
 
 fn configFromEditor() ?config.Config {
+    debugLog("configFromEditor begin\n", .{});
     const text = readEditor() catch |err| {
         app.log.logf("cannot read config editor: {s}", .{@errorName(err)});
         return null;
     };
     defer app.gpa.free(text);
+    debugLog("config editor bytes={d}\n", .{text.len});
 
     var cfg = config.Config{};
     config.parseText(text, &cfg) catch |err| {
@@ -513,20 +652,30 @@ fn configFromEditor() ?config.Config {
         app.log.log("PIMON_HTTP_SECRET is empty");
         return null;
     }
+    debugLog("configFromEditor done\n", .{});
     return cfg;
 }
 
 fn startFromEditor(save: bool) bool {
+    debugLog("startFromEditor begin\n", .{});
     if (app.running.load(.acquire)) {
         app.log.log("already running");
         return true;
     }
-    const cfg = configFromEditor() orelse return false;
+    const cfg = configFromEditor() orelse {
+        debugLog("configFromEditor returned null\n", .{});
+        return false;
+    };
+    debugLog("config parsed, url={s}\n", .{cfg.url()});
     if (save) _ = saveEditor();
-    return startWorker(cfg);
+    debugLog("startWorker begin\n", .{});
+    const ok = startWorker(cfg);
+    debugLog("startWorker returned {s}\n", .{if (ok) "true" else "false"});
+    return ok;
 }
 
 fn startWorker(cfg: config.Config) bool {
+    debugLog("startWorker enter\n", .{});
     if (app.worker_thread) |thread| {
         thread.join();
         app.worker_thread = null;
@@ -549,6 +698,7 @@ fn startWorker(cfg: config.Config) bool {
         .running = &app.running,
     };
 
+    debugLog("spawning worker\n", .{});
     app.worker_thread = std.Thread.spawn(.{ .stack_size = 512 * 1024 }, worker.run, .{ctx}) catch |err| {
         app.gpa.destroy(ctx);
         app.running.store(false, .release);
@@ -556,6 +706,7 @@ fn startWorker(cfg: config.Config) bool {
         return false;
     };
     app.log.logf("start requested -> {s}", .{cfg.url()});
+    debugLog("worker started\n", .{});
     updateStatus();
     return true;
 }
@@ -583,10 +734,16 @@ fn shutdown() void {
 }
 
 fn setWindowTextUtf8(h: c.HWND, text: []const u8) void {
+    debugLog("setWindowText enter hwnd=0x{x} bytes={d}\n", .{ @intFromPtr(h), text.len });
     if (h == null) return;
-    const wide = std.unicode.utf8ToUtf16LeAllocZ(app.gpa, text) catch return;
+    const wide = std.unicode.utf8ToUtf16LeAllocZ(app.gpa, text) catch {
+        debugLog("setWindowText utf16 conversion failed\n", .{});
+        return;
+    };
     defer app.gpa.free(wide);
+    debugLog("setWindowText converted\n", .{});
     _ = c.SetWindowTextW(h, wide.ptr);
+    debugLog("setWindowText done\n", .{});
 }
 
 fn readEditor() ![]u8 {
@@ -625,6 +782,7 @@ fn runOnceMode() void {
         return;
     };
     defer app.gpa.free(text);
+    debugLog("config editor bytes={d}\n", .{text.len});
 
     var cfg = config.Config{};
     config.parseText(text, &cfg) catch |err| {
@@ -686,8 +844,8 @@ const Args = struct {
     show: bool = false,
     help: bool = false,
 
-    fn parse(self: *Args, init: std.process.Init) !void {
-        var it = try std.process.Args.Iterator.initAllocator(init.minimal.args, init.gpa);
+    fn parse(self: *Args, args: std.process.Args, gpa: std.mem.Allocator) !void {
+        var it = try std.process.Args.Iterator.initAllocator(args, gpa);
         defer it.deinit();
         _ = it.next();
         while (it.next()) |arg| {

@@ -27,7 +27,8 @@ pub const LogBuffer = struct {
             st.wSecond,
         }) catch return;
         const n = @min(prefix.len + text.len, line_buf.len - 1);
-        @memcpy(line_buf[0..prefix.len], prefix);
+        // `prefix` already lives at line_buf[0..prefix.len]; copying it onto
+        // itself would make @memcpy alias and panic in safe builds.
         @memcpy(line_buf[prefix.len..n], text[0 .. n - prefix.len]);
 
         self.mutex.lockUncancelable(self.io);

@@ -68,6 +68,20 @@ Window controls:
 
 The tray menu also has Open, Start, Stop and Exit.
 
+Startup diagnostics are appended to `%TEMP%\pimon-agent-win11.log` (for example
+`C:\Users\<you>\AppData\Local\Temp\pimon-agent-win11.log`).  If the window
+never appears, send that file.
+
+For terminal diagnostics build the console variant:
+
+```sh
+zig build win-debug -Doptimize=Debug
+# → zig-out/bin/pimon-agent-win11-debug.exe
+```
+
+Running `pimon-agent-win11-debug.exe --show` in PowerShell prints the same
+startup stages to the terminal and writes the log file.
+
 ## Keys
 
 Floats:

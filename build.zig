@@ -110,9 +110,37 @@ fn buildWin11Agent(b: *std.Build, test_step: ?*std.Build.Step, optimize: std.bui
         .root_module = agent_mod,
     });
     exe.subsystem = .windows;
+    exe.mingw_unicode_entry_point = true;
 
     const step = b.step("win", "Windows 11 agent (x86_64-windows-gnu)");
     step.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "pimon-agent-win11.exe" }).step);
+
+    // Same code, console subsystem + terminal diagnostics.
+    const debug_mod = b.createModule(.{
+        .root_source_file = b.path("agents/win11/main_console.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "winapi", .module = winapi_c.createModule() },
+            .{ .name = "data", .module = data_mod },
+        },
+    });
+    debug_mod.linkSystemLibrary("pdh", .{});
+    debug_mod.linkSystemLibrary("iphlpapi", .{});
+    debug_mod.linkSystemLibrary("dxgi", .{});
+    debug_mod.linkSystemLibrary("ole32", .{});
+    debug_mod.linkSystemLibrary("ntdll", .{});
+    debug_mod.linkSystemLibrary("advapi32", .{});
+    debug_mod.linkSystemLibrary("shell32", .{});
+    debug_mod.linkSystemLibrary("user32", .{});
+    debug_mod.linkSystemLibrary("gdi32", .{});
+    const debug_exe = b.addExecutable(.{
+        .name = "pimon-agent-win11-debug",
+        .root_module = debug_mod,
+    });
+    const debug_step = b.step("win-debug", "Windows 11 agent diagnostic console build");
+    debug_step.dependOn(&b.addInstallArtifact(debug_exe, .{ .dest_sub_path = "pimon-agent-win11-debug.exe" }).step);
 
     // Host tests for the parts that do not touch Win32.
     if (test_step) |ts| {

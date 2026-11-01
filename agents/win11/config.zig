@@ -98,7 +98,7 @@ pub fn resolvePath(
 }
 
 /// Read the raw config text for the UI editor.  Returns null when missing.
-pub fn readRaw(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !?[]u8 {
+pub fn readRaw(io: std.Io, gpa: std.mem.Allocator, path: []const u8) !?[:0]u8 {
     const text = std.Io.Dir.cwd().readFileAllocOptions(
         io,
         path,
