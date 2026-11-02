@@ -12,13 +12,12 @@ const worker = @import("worker.zig");
 const LogBuffer = @import("logbuf.zig").LogBuffer;
 
 const window_class = Backend.win32.L("PimonAgentWin11Dvui");
-const tray_class = std.unicode.utf8ToUtf16LeStringLiteral("PimonAgentWin11Tray");
-const WM_TRAY: c.UINT = 0x8000 + 1;
+const WM_TRAY: u32 = 0x8000 + 1;
 
-const ID_OPEN: usize = 100;
-const ID_START: usize = 104;
-const ID_STOP: usize = 108;
-const ID_EXIT: usize = 112;
+const ID_OPEN: usize = 0xE001;
+const ID_START: usize = 0xE002;
+const ID_STOP: usize = 0xE003;
+const ID_EXIT: usize = 0xE004;
 
 const App = struct {
     io: std.Io,
@@ -31,9 +30,8 @@ const App = struct {
     log: LogBuffer = undefined,
     log_total: u64 = 0,
     main_hwnd: ?Backend.win32.HWND = null,
-    tray_hwnd: c.HWND = null,
-    tray_msg: c.UINT = WM_TRAY,
-    taskbar_msg: c.UINT = 0,
+    original_wndproc: ?Backend.win32.WNDPROC = null,
+    taskbar_msg: u32 = 0,
     tray_added: bool = false,
     worker_thread: ?std.Thread = null,
     stop: std.atomic.Value(bool) = .init(false),
@@ -154,8 +152,7 @@ pub fn main(init: std.process.Init) !void {
         app.config_text.deinit(app.gpa);
         app.log_text.deinit(app.gpa);
     }
-    createTrayWindow();
-    addTrayIcon();
+    installTray();
     uiLogf("tray added={s}\n", .{if (app.tray_added) "true" else "false"});
 
     const win = backend.getWindow();
@@ -392,6 +389,7 @@ const SW_SHOW: Backend.win32.SHOW_WINDOW_CMD = @bitCast(@as(u32, 5));
 const SW_RESTORE: Backend.win32.SHOW_WINDOW_CMD = @bitCast(@as(u32, 9));
 
 fn showWindow() void {
+    uiLogf("showWindow hwnd=0x{x}\n", .{@intFromPtr(app.main_hwnd)});
     if (app.main_hwnd == null) return;
     _ = Backend.win32.ShowWindow(app.main_hwnd, SW_RESTORE);
     _ = Backend.win32.ShowWindow(app.main_hwnd, SW_SHOW);
@@ -399,98 +397,126 @@ fn showWindow() void {
 }
 
 fn hideWindow() void {
+    uiLogf("hideWindow hwnd=0x{x}\n", .{@intFromPtr(app.main_hwnd)});
     if (app.main_hwnd == null) return;
     _ = Backend.win32.ShowWindow(app.main_hwnd, SW_HIDE);
 }
 
-fn createTrayWindow() void {
-    const inst = c.GetModuleHandleW(null);
-    app.taskbar_msg = c.RegisterWindowMessageW(std.unicode.utf8ToUtf16LeStringLiteral("TaskbarCreated"));
-
-    var wc: c.WNDCLASSEXW = std.mem.zeroes(c.WNDCLASSEXW);
-    wc.cbSize = @sizeOf(c.WNDCLASSEXW);
-    wc.lpfnWndProc = trayProc;
-    wc.hInstance = inst;
-    wc.lpszClassName = tray_class;
-    if (c.RegisterClassExW(&wc) == 0) {
-        app.log.log("cannot register tray window class");
-        return;
-    }
-    app.tray_hwnd = c.CreateWindowExW(0, tray_class, window_class, 0, 0, 0, 0, 0, null, null, inst, null);
-    if (app.tray_hwnd == null) app.log.log("cannot create tray window");
+fn installTray() void {
+    const hwnd = app.main_hwnd orelse return;
+    app.taskbar_msg = Backend.win32.RegisterWindowMessageW(Backend.win32.L("TaskbarCreated"));
+    const previous = Backend.win32.SetWindowLongPtrW(hwnd, Backend.win32.GWLP_WNDPROC, @bitCast(@intFromPtr(&mainWndProc)));
+    if (previous != 0) app.original_wndproc = @ptrFromInt(@as(usize, @bitCast(previous)));
+    addTrayIcon();
 }
 
-fn trayProc(hwnd: c.HWND, msg: c.UINT, wparam: c.WPARAM, lparam: c.LPARAM) callconv(.c) c.LRESULT {
+fn mainWndProc(
+    hwnd: Backend.win32.HWND,
+    msg: u32,
+    wparam: Backend.win32.WPARAM,
+    lparam: Backend.win32.LPARAM,
+) callconv(.winapi) Backend.win32.LRESULT {
     switch (msg) {
         WM_TRAY => {
-            const ev: c.UINT = @intCast(@as(u64, @bitCast(lparam)) & 0xffff);
-            if (ev == c.WM_LBUTTONDBLCLK) {
+            const ev: u32 = @intCast(@as(u64, @bitCast(lparam)) & 0xffff);
+            uiLogf("tray event {d}\n", .{ev});
+            if (ev == Backend.win32.WM_LBUTTONUP or ev == Backend.win32.WM_LBUTTONDBLCLK) {
                 showWindow();
-            } else if (ev == c.WM_RBUTTONUP or ev == c.WM_CONTEXTMENU) {
-                showTrayMenu(hwnd);
+            } else if (ev == Backend.win32.WM_RBUTTONDOWN or ev == Backend.win32.WM_RBUTTONUP or ev == Backend.win32.WM_CONTEXTMENU) {
+                showTrayMenu();
             }
             return 0;
         },
-        c.WM_COMMAND => {
+        Backend.win32.WM_COMMAND => {
             const id: usize = @intCast(wparam & 0xffff);
             switch (id) {
-                ID_OPEN => showWindow(),
-                ID_START => _ = startFromConfig(true),
-                ID_STOP => stopWorker(),
-                ID_EXIT => app.quit = true,
+                ID_OPEN => {
+                    uiLogf("tray command {d}\n", .{id});
+                    showWindow();
+                    return 0;
+                },
+                ID_START => {
+                    uiLogf("tray command {d}\n", .{id});
+                    _ = startFromConfig(true);
+                    return 0;
+                },
+                ID_STOP => {
+                    uiLogf("tray command {d}\n", .{id});
+                    stopWorker();
+                    return 0;
+                },
+                ID_EXIT => {
+                    uiLogf("tray command {d}\n", .{id});
+                    app.quit = true;
+                    return 0;
+                },
                 else => {},
             }
-            return 0;
         },
         else => {
             if (app.taskbar_msg != 0 and msg == app.taskbar_msg) {
                 addTrayIcon();
                 return 0;
             }
-            return c.DefWindowProcW(hwnd, msg, wparam, lparam);
         },
     }
+
+    if (app.original_wndproc) |original| {
+        return Backend.win32.CallWindowProcW(original, hwnd, msg, wparam, lparam);
+    }
+    return Backend.win32.DefWindowProcW(hwnd, msg, wparam, lparam);
 }
 
 fn addTrayIcon() void {
-    if (app.tray_hwnd == null) return;
-    var nid: c.NOTIFYICONDATAW = std.mem.zeroes(c.NOTIFYICONDATAW);
-    nid.cbSize = @sizeOf(c.NOTIFYICONDATAW);
-    nid.hWnd = app.tray_hwnd;
+    const hwnd = app.main_hwnd orelse return;
+    var nid: Backend.win32.NOTIFYICONDATAW = std.mem.zeroes(Backend.win32.NOTIFYICONDATAW);
+    nid.cbSize = @sizeOf(Backend.win32.NOTIFYICONDATAW);
+    nid.hWnd = hwnd;
     nid.uID = 1;
-    nid.uFlags = c.NIF_MESSAGE | c.NIF_ICON | c.NIF_TIP;
-    nid.uCallbackMessage = app.tray_msg;
-    nid.hIcon = c.LoadIconW(null, @ptrFromInt(32512));
+    nid.uFlags = .{ .MESSAGE = 1, .ICON = 1, .TIP = 1 };
+    nid.uCallbackMessage = WM_TRAY;
+    nid.hIcon = Backend.win32.LoadIconW(null, Backend.win32.IDI_APPLICATION);
     const tip: []const u16 = std.unicode.utf8ToUtf16LeStringLiteral("pimon-agent-win11");
     @memcpy(nid.szTip[0..tip.len], tip);
-    if (c.Shell_NotifyIconW(c.NIM_ADD, &nid) != 0) app.tray_added = true;
+    if (Backend.win32.Shell_NotifyIconW(Backend.win32.NIM_ADD, &nid) != 0) app.tray_added = true;
+    uiLogf("tray add main hwnd=0x{x} result={s}\n", .{ @intFromPtr(hwnd), if (app.tray_added) "true" else "false" });
 }
 
 fn removeTrayIcon() void {
-    if (app.tray_hwnd == null or !app.tray_added) return;
-    var nid: c.NOTIFYICONDATAW = std.mem.zeroes(c.NOTIFYICONDATAW);
-    nid.cbSize = @sizeOf(c.NOTIFYICONDATAW);
-    nid.hWnd = app.tray_hwnd;
+    const hwnd = app.main_hwnd orelse return;
+    if (!app.tray_added) return;
+    var nid: Backend.win32.NOTIFYICONDATAW = std.mem.zeroes(Backend.win32.NOTIFYICONDATAW);
+    nid.cbSize = @sizeOf(Backend.win32.NOTIFYICONDATAW);
+    nid.hWnd = hwnd;
     nid.uID = 1;
-    _ = c.Shell_NotifyIconW(c.NIM_DELETE, &nid);
+    _ = Backend.win32.Shell_NotifyIconW(Backend.win32.NIM_DELETE, &nid);
     app.tray_added = false;
 }
 
-fn showTrayMenu(hwnd: c.HWND) void {
-    const menu = c.CreatePopupMenu();
-    if (menu == null) return;
-    defer _ = c.DestroyMenu(menu);
-    _ = c.AppendMenuW(menu, c.MF_STRING, ID_OPEN, std.unicode.utf8ToUtf16LeStringLiteral("Open"));
-    _ = c.AppendMenuW(menu, c.MF_SEPARATOR, 0, null);
-    _ = c.AppendMenuW(menu, c.MF_STRING, ID_START, std.unicode.utf8ToUtf16LeStringLiteral("Start"));
-    _ = c.AppendMenuW(menu, c.MF_STRING, ID_STOP, std.unicode.utf8ToUtf16LeStringLiteral("Stop"));
-    _ = c.AppendMenuW(menu, c.MF_SEPARATOR, 0, null);
-    _ = c.AppendMenuW(menu, c.MF_STRING, ID_EXIT, std.unicode.utf8ToUtf16LeStringLiteral("Exit"));
-    var pt: c.POINT = undefined;
-    _ = c.GetCursorPos(&pt);
-    _ = c.SetForegroundWindow(hwnd);
-    _ = c.TrackPopupMenu(menu, c.TPM_LEFTALIGN | c.TPM_BOTTOMALIGN | c.TPM_RIGHTBUTTON, pt.x, pt.y, 0, hwnd, null);
-    _ = c.PostMessageW(hwnd, c.WM_NULL, 0, 0);
+fn showTrayMenu() void {
+    uiLog("showTrayMenu\n");
+    const hwnd = app.main_hwnd orelse return;
+    const menu = Backend.win32.CreatePopupMenu() orelse return;
+    defer _ = Backend.win32.DestroyMenu(menu);
+    _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_STRING, ID_OPEN, Backend.win32.L("Open"));
+    _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_SEPARATOR, 0, null);
+    _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_STRING, ID_START, Backend.win32.L("Start"));
+    _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_STRING, ID_STOP, Backend.win32.L("Stop"));
+    _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_SEPARATOR, 0, null);
+    _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_STRING, ID_EXIT, Backend.win32.L("Exit"));
+    var pt: Backend.win32.POINT = undefined;
+    _ = Backend.win32.GetCursorPos(&pt);
+    _ = Backend.win32.SetForegroundWindow(hwnd);
+    _ = Backend.win32.TrackPopupMenu(
+        menu,
+        .{ .RIGHTBUTTON = 1, .BOTTOMALIGN = 1 },
+        pt.x,
+        pt.y,
+        0,
+        hwnd,
+        null,
+    );
+    _ = Backend.win32.PostMessageW(hwnd, Backend.win32.WM_NULL, 0, 0);
 }
 
 fn installConfig() void {
