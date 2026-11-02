@@ -3,9 +3,9 @@
 Windows 11 tray application for monitoring a pimon server on a Raspberry Pi.
 
 It samples local CPU, memory, network, system information and GPU metrics and
-pushes typed JSON batches to pimon over `POST /api/v1/data`.  The app starts with its window visible; use `--hidden` to start minimised to the
-system tray.  Double-click the tray icon (or right-click → Open) to bring the
-window back.
+pushes typed JSON batches to pimon over `POST /api/v1/data`.  The window opens
+by default; use `--hidden` to start minimised to the system tray.  Double-click
+the tray icon (or right-click → Open) to bring the window back.
 
 ## Build
 
@@ -14,18 +14,9 @@ zig build win -Doptimize=ReleaseSafe
 # → zig-out/bin/pimon-agent-win11.exe  (x86_64-windows-gnu)
 ```
 
-Two Windows UIs are available:
-
-```sh
-zig build win -Doptimize=ReleaseSafe       # native Win32 controls
-zig build win-ui -Doptimize=ReleaseSafe    # DVUI + DX11 UI
-zig build win-ui-debug -Doptimize=Debug    # console diagnostic version
-```
-
-The native build is the fallback for machines without D3D11 (some RDP/VM
-sessions).  The DVUI build has a real multiline config editor, a scrolling
-coloured log view, themed buttons and the same tray/worker behaviour.  Both
-load NVML dynamically when an NVIDIA adapter is present.
+The UI uses DVUI's native DX11 backend and requires a usable D3D11 adapter
+(some RDP/VM sessions may not provide one).  It includes a multiline config
+editor, scrolling log view and themed controls.
 
 ## First run
 
@@ -59,28 +50,14 @@ PIMON_ENABLE_GPU=1
 
 ## Running
 
-Native UI:
-
 ```text
 pimon-agent-win11.exe ...
-```
 
-DVUI UI:
-
-```text
-pimon-agent-win11-ui.exe ...
-```
-
-Both accept the same flags:
-
-```text
 --hidden        start minimised in the system tray
 --config PATH   alternate config
 --once          one sample + upload, result in a message box
 install-config  create config and open Notepad
 ```
-
-The native UI is the default; use `-ui` for the themed editor/log window.
 
 Window controls:
 
@@ -93,9 +70,8 @@ Window controls:
 The tray menu also has Open, Start, Stop and Exit.
 
 Startup diagnostics are appended to `%TEMP%\pimon-agent-win11.log` (for example
-`C:\Users\<you>\AppData\Local\Temp\pimon-agent-win11.log`).  The DVUI build
-uses `%TEMP%\pimon-agent-win11-ui.log`.  If the window never appears, send the
-relevant file.
+`C:\Users\<you>\AppData\Local\Temp\pimon-agent-win11.log`).  If the window
+never appears, send that file.
 
 For terminal diagnostics build the console variant:
 

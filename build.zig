@@ -61,107 +61,11 @@ pub fn build(b: *std.Build) void {
     pi2_step.dependOn(sdl_step);
     pi2_step.dependOn(fb_step);
 
-    buildWin11Agent(b, test_step, optimize);
-    buildWinUi(b, optimize);
+    buildWin11(b, optimize, test_step);
 }
 
-/// Windows 11 monitoring agent: a console daemon that samples local metrics
-/// and pushes typed values to a pimon server.
-fn buildWin11Agent(b: *std.Build, test_step: ?*std.Build.Step, optimize: std.builtin.OptimizeMode) void {
-    const target = b.resolveTargetQuery(.{
-        .cpu_arch = .x86_64,
-        .os_tag = .windows,
-        .abi = .gnu,
-    });
-
-    const winapi_c = b.addTranslateC(.{
-        .root_source_file = b.path("agents/win11/winapi.h"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const data_mod = b.createModule(.{
-        .root_source_file = b.path("src/data.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-
-    const agent_mod = b.createModule(.{
-        .root_source_file = b.path("agents/win11/main.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "winapi", .module = winapi_c.createModule() },
-            .{ .name = "data", .module = data_mod },
-        },
-    });
-    agent_mod.linkSystemLibrary("pdh", .{});
-    agent_mod.linkSystemLibrary("iphlpapi", .{});
-    agent_mod.linkSystemLibrary("dxgi", .{});
-    agent_mod.linkSystemLibrary("ole32", .{});
-    agent_mod.linkSystemLibrary("ntdll", .{});
-    agent_mod.linkSystemLibrary("advapi32", .{});
-    agent_mod.linkSystemLibrary("shell32", .{});
-    agent_mod.linkSystemLibrary("user32", .{});
-    agent_mod.linkSystemLibrary("gdi32", .{});
-
-    const exe = b.addExecutable(.{
-        .name = "pimon-agent-win11",
-        .root_module = agent_mod,
-    });
-    exe.subsystem = .windows;
-    exe.mingw_unicode_entry_point = true;
-
-    const step = b.step("win", "Windows 11 agent (x86_64-windows-gnu)");
-    step.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "pimon-agent-win11.exe" }).step);
-
-    // Same code, console subsystem + terminal diagnostics.
-    const debug_mod = b.createModule(.{
-        .root_source_file = b.path("agents/win11/main_console.zig"),
-        .target = target,
-        .optimize = optimize,
-        .link_libc = true,
-        .imports = &.{
-            .{ .name = "winapi", .module = winapi_c.createModule() },
-            .{ .name = "data", .module = data_mod },
-        },
-    });
-    debug_mod.linkSystemLibrary("pdh", .{});
-    debug_mod.linkSystemLibrary("iphlpapi", .{});
-    debug_mod.linkSystemLibrary("dxgi", .{});
-    debug_mod.linkSystemLibrary("ole32", .{});
-    debug_mod.linkSystemLibrary("ntdll", .{});
-    debug_mod.linkSystemLibrary("advapi32", .{});
-    debug_mod.linkSystemLibrary("shell32", .{});
-    debug_mod.linkSystemLibrary("user32", .{});
-    debug_mod.linkSystemLibrary("gdi32", .{});
-    const debug_exe = b.addExecutable(.{
-        .name = "pimon-agent-win11-debug",
-        .root_module = debug_mod,
-    });
-    const debug_step = b.step("win-debug", "Windows 11 agent diagnostic console build");
-    debug_step.dependOn(&b.addInstallArtifact(debug_exe, .{ .dest_sub_path = "pimon-agent-win11-debug.exe" }).step);
-
-    // Host tests for the parts that do not touch Win32.
-    if (test_step) |ts| {
-        const host_data = b.createModule(.{
-            .root_source_file = b.path("src/data.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-        });
-        const logic_mod = b.createModule(.{
-            .root_source_file = b.path("agents/win11/test.zig"),
-            .target = b.graph.host,
-            .optimize = .Debug,
-            .imports = &.{.{ .name = "data", .module = host_data }},
-        });
-        ts.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = logic_mod })).step);
-    }
-}
-
-/// Experimental DVUI DX11 tray UI for the Win11 agent.
-fn buildWinUi(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
+/// Windows 11 agent: DVUI/DX11 tray UI plus the sampling worker.
+fn buildWin11(b: *std.Build, optimize: std.builtin.OptimizeMode, test_step: ?*std.Build.Step) void {
     const target = b.resolveTargetQuery(.{
         .cpu_arch = .x86_64,
         .os_tag = .windows,
@@ -193,7 +97,7 @@ fn buildWinUi(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
     });
 
     const mod = b.createModule(.{
-        .root_source_file = b.path("agents/win11/main_ui.zig"),
+        .root_source_file = b.path("agents/win11/main.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -214,14 +118,14 @@ fn buildWinUi(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
     mod.linkSystemLibrary("ntdll", .{});
     mod.linkSystemLibrary("advapi32", .{});
 
-    const exe = b.addExecutable(.{ .name = "pimon-agent-win11-ui", .root_module = mod });
+    const exe = b.addExecutable(.{ .name = "pimon-agent-win11", .root_module = mod });
     exe.subsystem = .windows;
-    const step = b.step("win-ui", "Win11 agent DVUI/DX11 tray UI");
-    step.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "pimon-agent-win11-ui.exe" }).step);
+    const step = b.step("win", "Win11 agent DVUI/DX11 tray UI (x86_64-windows-gnu)");
+    step.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "pimon-agent-win11.exe" }).step);
 
     // Same DVUI app with a console subsystem and terminal diagnostics.
     const debug_mod = b.createModule(.{
-        .root_source_file = b.path("agents/win11/main_ui_console.zig"),
+        .root_source_file = b.path("agents/win11/main_console.zig"),
         .target = target,
         .optimize = optimize,
         .link_libc = true,
@@ -241,9 +145,25 @@ fn buildWinUi(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
     debug_mod.linkSystemLibrary("ole32", .{});
     debug_mod.linkSystemLibrary("ntdll", .{});
     debug_mod.linkSystemLibrary("advapi32", .{});
-    const debug_exe = b.addExecutable(.{ .name = "pimon-agent-win11-ui-debug", .root_module = debug_mod });
-    const debug_step = b.step("win-ui-debug", "Win11 agent DVUI/DX11 diagnostic console build");
-    debug_step.dependOn(&b.addInstallArtifact(debug_exe, .{ .dest_sub_path = "pimon-agent-win11-ui-debug.exe" }).step);
+    const debug_exe = b.addExecutable(.{ .name = "pimon-agent-win11-debug", .root_module = debug_mod });
+    const debug_step = b.step("win-debug", "Win11 agent DVUI/DX11 diagnostic console build");
+    debug_step.dependOn(&b.addInstallArtifact(debug_exe, .{ .dest_sub_path = "pimon-agent-win11-debug.exe" }).step);
+
+    // Host tests for the parts that do not touch Win32.
+    if (test_step) |ts| {
+        const host_data = b.createModule(.{
+            .root_source_file = b.path("src/data.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+        });
+        const logic_mod = b.createModule(.{
+            .root_source_file = b.path("agents/win11/test.zig"),
+            .target = b.graph.host,
+            .optimize = .Debug,
+            .imports = &.{.{ .name = "data", .module = host_data }},
+        });
+        ts.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = logic_mod })).step);
+    }
 }
 
 /// DVUI's SDL2 backend + our dashboard.

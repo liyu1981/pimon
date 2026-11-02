@@ -16,14 +16,12 @@ echo "==> host framebuffer backend (Debug)"
 
 echo "==> Windows 11 agent (Debug)"
 "$ZIG" build win
-"$ZIG" build win-ui
-"$ZIG" build win-ui-debug
+"$ZIG" build win-debug
 
 cp -f zig-out/bin/pimon-sdl "$OUT/"
 cp -f zig-out/bin/pimon-fb "$OUT/"
 cp -f zig-out/bin/pimon-agent-win11.exe "$OUT/"
-cp -f zig-out/bin/pimon-agent-win11-ui.exe "$OUT/"
-cp -f zig-out/bin/pimon-agent-win11-ui-debug.exe "$OUT/"
+cp -f zig-out/bin/pimon-agent-win11-debug.exe "$OUT/"
 
 echo
 echo "development binaries:"
