@@ -17,6 +17,7 @@
         "build.zig.zon",
         "src",
         "agents",
+        "assets",
         "layouts",
         "scripts",
         "vendor",

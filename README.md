@@ -4,6 +4,79 @@ A small system dashboard for a headless Raspberry Pi, built with
 [DVUI](https://github.com/david-vanderson/dvui) and rendered straight to the
 console.
 
+![pimon dashboard demo](https://raw.githubusercontent.com/liyu1981/pimon/master/assets/pimon-demo.jpg)
+
+## Why pimon
+
+Headless Raspberry Pis are ideal always-on machines, but most dashboards assume
+a desktop browser or a full GUI stack.  pimon is deliberately the opposite: a
+small native Zig dashboard that draws straight to the console through
+KMSDRM/OpenGL ES or a plain `/dev/fb0`, with no X11, Wayland, browser or desktop
+environment involved.
+
+Existing solutions such as [Mobro](https://mobro.app/) are very bloated and
+heavy for a single-purpose console dashboard.  pimon is an attempt to build a **lean,
+simple, and fast** alternative: a focused native dashboard with a small
+dependency footprint and direct console rendering.
+
+It is also a small monitoring hub.  Local `/proc` metrics and remote agents
+(such as the Windows 11 agent) feed the same typed data API, and the screen
+layout is a runtime `.layout.zon` file that can be changed without
+recompiling.
+
+## Objective
+
+- **Lean, simple and fast**: avoid the heavy feature sprawl of bloated
+  dashboards and keep the runtime small.
+- **One self-contained binary** per display backend: SDL2/KMSDRM for GPU
+  acceleration, or the software framebuffer fallback.
+- **Fast on a Raspberry Pi 2**: low overhead, no desktop stack, direct console
+  rendering.
+- **Data-driven UI**: widgets, bindings and actions live in `.layout.zon`;
+  custom components can still be added in Zig.
+- **One data path for local and remote metrics**: typed floats, series, text
+  and booleans, with optional HTTP/WebSocket control and agent injection.
+- **Reusable building blocks**: gauges, arc drawing, sparklines, palettes, and a
+  Windows 11 tray agent with CPU/GPU/network monitoring.
+- **Easy operation**: systemd service support, touchscreen input and a small
+  bearer-authenticated network listener.
+
+## Quick start
+
+On the Pi (GPU console):
+
+```sh
+zig build -Doptimize=ReleaseFast
+./zig-out/bin/pimon-sdl
+```
+
+Software framebuffer fallback:
+
+```sh
+zig build -Doptimize=ReleaseFast -Dgui=fb
+./zig-out/bin/pimon-fb --layout layouts/pi-monitor.layout.zon
+```
+
+Windows 11 agent:
+
+```sh
+zig build win -Doptimize=ReleaseSafe
+# copy zig-out/bin/pimon-agent-win11.exe to Windows and run it
+# use --hidden to start in the tray
+```
+
+Or build the full release set:
+
+```sh
+./scripts/build-release.sh
+# dist/release/ contains pimon-pi2-sdl, pimon-pi2-fb,
+# pimon-sdl, pimon-fb and pimon-agent-win11.exe
+```
+
+See [Build](#3-build) for dependencies and cross-compilation details, and
+[Network control listener](#network-control-listener) for the HTTP/WebSocket
+API.
+
 Two output backends are included:
 
 | Backend | How it draws | Use it for |
@@ -27,7 +100,7 @@ src/layout.zig       .layout.zon engine: schema + ZON parser + interpreter
 src/metrics.zig      host metrics sampled from /proc (+ load history)
 src/net.zig          optional HTTP + WebSocket control listener
 src/data.zig         universal typed data values (float/series/text/bool)
-agents/win11/        Windows 11 daemon that pushes metrics to pimon
+agents/win11/        Windows 11 tray agent (DVUI/DX11) that pushes metrics
 src/widgets.zig      module root for the reusable drawing widgets
 src/widgets/arc.zig  Canvas-style arc() with round end caps
 src/widgets/gauge.zig     radial gauge (background arc + value arc)
