@@ -1,0 +1,2 @@
+#define IDI_PIMON 1
+IDI_PIMON ICON "pimon-win11.ico"

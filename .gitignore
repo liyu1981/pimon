@@ -2,5 +2,6 @@
 zig-pkg/
 zig-out/
 *.png
+!assets/pimon-win11.png
 *.fb
 dist/

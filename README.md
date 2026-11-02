@@ -202,6 +202,8 @@ under `dist/release/`.
 
 ### Windows 11 agent
 
+<img src="https://raw.githubusercontent.com/liyu1981/pimon/master/assets/pimon-win11.png" width="72" alt="pimon Windows 11 agent icon">
+
 ```sh
 zig build win -Doptimize=ReleaseSafe      # DVUI/DX11 tray UI
 ```

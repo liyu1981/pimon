@@ -117,7 +117,8 @@ pub fn main(init: std.process.Init) !void {
 
     dvui.io = init.io;
     uiLog("registering dvui window class\n");
-    Backend.RegisterClass(window_class, .{}) catch |err| {
+    const icon = appIcon();
+    Backend.RegisterClass(window_class, .{ .icon = icon, .icon_small = icon }) catch |err| {
         uiLogf("RegisterClass failed: {s} (win32 error {d})\n", .{ @errorName(err), Backend.win32.GetLastError() });
         messageBoxf("pimon-agent-win11", "Cannot register the DVUI window class: {s}", .{@errorName(err)});
         return err;
@@ -402,6 +403,12 @@ fn hideWindow() void {
     _ = Backend.win32.ShowWindow(app.main_hwnd, SW_HIDE);
 }
 
+fn appIcon() ?Backend.win32.HICON {
+    const hinst = Backend.win32.GetModuleHandleW(null);
+    const resource: [*:0]align(1) const u16 = @ptrFromInt(1);
+    return Backend.win32.LoadIconW(hinst, resource);
+}
+
 fn installTray() void {
     const hwnd = app.main_hwnd orelse return;
     app.taskbar_msg = Backend.win32.RegisterWindowMessageW(Backend.win32.L("TaskbarCreated"));
@@ -475,7 +482,7 @@ fn addTrayIcon() void {
     nid.uID = 1;
     nid.uFlags = .{ .MESSAGE = 1, .ICON = 1, .TIP = 1 };
     nid.uCallbackMessage = WM_TRAY;
-    nid.hIcon = Backend.win32.LoadIconW(null, Backend.win32.IDI_APPLICATION);
+    nid.hIcon = appIcon() orelse Backend.win32.LoadIconW(null, Backend.win32.IDI_APPLICATION);
     const tip: []const u16 = std.unicode.utf8ToUtf16LeStringLiteral("pimon-agent-win11");
     @memcpy(nid.szTip[0..tip.len], tip);
     if (Backend.win32.Shell_NotifyIconW(Backend.win32.NIM_ADD, &nid) != 0) app.tray_added = true;
