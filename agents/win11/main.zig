@@ -186,8 +186,10 @@ pub fn run(
     debugLog("window created\n", .{});
     loadEditorFromDisk();
     const started = startFromEditor(false);
-    debugLog("startFromEditor={s} tray={s}\n", .{ if (started) "true" else "false", if (app.tray_added) "true" else "false" });
-    if (args.show or !started or !app.tray_added) {
+    debugLog("startFromEditor={s} tray={s} hidden={s}\n", .{ if (started) "true" else "false", if (app.tray_added) "true" else "false", if (args.hidden) "true" else "false" });
+    if (args.hidden and started and app.tray_added) {
+        hideWindow();
+    } else {
         showWindow();
     }
 
@@ -842,6 +844,7 @@ const Args = struct {
     install_config: bool = false,
     once: bool = false,
     show: bool = false,
+    hidden: bool = false,
     help: bool = false,
 
     fn parse(self: *Args, args: std.process.Args, gpa: std.mem.Allocator) !void {
@@ -857,6 +860,8 @@ const Args = struct {
                 self.once = true;
             } else if (std.mem.eql(u8, arg, "--show")) {
                 self.show = true;
+            } else if (std.mem.eql(u8, arg, "--hidden")) {
+                self.hidden = true;
             } else if (std.mem.eql(u8, arg, "--help") or std.mem.eql(u8, arg, "-h")) {
                 self.help = true;
             } else {
@@ -870,7 +875,7 @@ const usage_text =
     \\pimon-agent-win11 - Windows 11 metrics agent for pimon
     \\
     \\Usage:
-    \\  pimon-agent-win11 [--show] [--config PATH]
+    \\  pimon-agent-win11 [--hidden] [--config PATH]
     \\  pimon-agent-win11 install-config [--config PATH]
     \\  pimon-agent-win11 --once [--config PATH]
     \\

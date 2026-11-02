@@ -19,12 +19,14 @@ echo "==> host framebuffer backend (ReleaseFast)"
 
 echo "==> Windows 11 agent (ReleaseSafe)"
 "$ZIG" build win -Doptimize=ReleaseSafe
+"$ZIG" build win-ui -Doptimize=ReleaseSafe
 
 cp -f zig-out/bin/pimon-pi2-sdl "$OUT/"
 cp -f zig-out/bin/pimon-pi2-fb "$OUT/"
 cp -f zig-out/bin/pimon-sdl "$OUT/"
 cp -f zig-out/bin/pimon-fb "$OUT/"
 cp -f zig-out/bin/pimon-agent-win11.exe "$OUT/"
+cp -f zig-out/bin/pimon-agent-win11-ui.exe "$OUT/"
 
 echo
 echo "release binaries:"

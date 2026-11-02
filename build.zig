@@ -62,6 +62,7 @@ pub fn build(b: *std.Build) void {
     pi2_step.dependOn(fb_step);
 
     buildWin11Agent(b, test_step, optimize);
+    buildWinUi(b, optimize);
 }
 
 /// Windows 11 monitoring agent: a console daemon that samples local metrics
@@ -157,6 +158,92 @@ fn buildWin11Agent(b: *std.Build, test_step: ?*std.Build.Step, optimize: std.bui
         });
         ts.dependOn(&b.addRunArtifact(b.addTest(.{ .root_module = logic_mod })).step);
     }
+}
+
+/// Experimental DVUI DX11 tray UI for the Win11 agent.
+fn buildWinUi(b: *std.Build, optimize: std.builtin.OptimizeMode) void {
+    const target = b.resolveTargetQuery(.{
+        .cpu_arch = .x86_64,
+        .os_tag = .windows,
+        .abi = .gnu,
+    });
+
+    const dvui_dep = b.dependency("dvui", .{
+        .target = target,
+        .optimize = optimize,
+        .backend = .dx11,
+        .libc = true,
+        .freetype = false,
+        .@"stb-image" = true,
+        .@"tiny-file-dialogs" = false,
+        .@"tree-sitter" = false,
+        .tvg = false,
+    });
+
+    const data_mod = b.createModule(.{
+        .root_source_file = b.path("src/data.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const winapi_c = b.addTranslateC(.{
+        .root_source_file = b.path("agents/win11/winapi.h"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    const mod = b.createModule(.{
+        .root_source_file = b.path("agents/win11/main_ui.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "dvui", .module = dvui_dep.module("dvui_dx11") },
+            .{ .name = "dx11-backend", .module = dvui_dep.module("dx11") },
+            .{ .name = "data", .module = data_mod },
+            .{ .name = "winapi", .module = winapi_c.createModule() },
+        },
+    });
+    mod.linkSystemLibrary("shell32", .{});
+    mod.linkSystemLibrary("user32", .{});
+    mod.linkSystemLibrary("gdi32", .{});
+    mod.linkSystemLibrary("pdh", .{});
+    mod.linkSystemLibrary("iphlpapi", .{});
+    mod.linkSystemLibrary("dxgi", .{});
+    mod.linkSystemLibrary("ole32", .{});
+    mod.linkSystemLibrary("ntdll", .{});
+    mod.linkSystemLibrary("advapi32", .{});
+
+    const exe = b.addExecutable(.{ .name = "pimon-agent-win11-ui", .root_module = mod });
+    exe.subsystem = .windows;
+    const step = b.step("win-ui", "Win11 agent DVUI/DX11 tray UI");
+    step.dependOn(&b.addInstallArtifact(exe, .{ .dest_sub_path = "pimon-agent-win11-ui.exe" }).step);
+
+    // Same DVUI app with a console subsystem and terminal diagnostics.
+    const debug_mod = b.createModule(.{
+        .root_source_file = b.path("agents/win11/main_ui_console.zig"),
+        .target = target,
+        .optimize = optimize,
+        .link_libc = true,
+        .imports = &.{
+            .{ .name = "dvui", .module = dvui_dep.module("dvui_dx11") },
+            .{ .name = "dx11-backend", .module = dvui_dep.module("dx11") },
+            .{ .name = "data", .module = data_mod },
+            .{ .name = "winapi", .module = winapi_c.createModule() },
+        },
+    });
+    debug_mod.linkSystemLibrary("shell32", .{});
+    debug_mod.linkSystemLibrary("user32", .{});
+    debug_mod.linkSystemLibrary("gdi32", .{});
+    debug_mod.linkSystemLibrary("pdh", .{});
+    debug_mod.linkSystemLibrary("iphlpapi", .{});
+    debug_mod.linkSystemLibrary("dxgi", .{});
+    debug_mod.linkSystemLibrary("ole32", .{});
+    debug_mod.linkSystemLibrary("ntdll", .{});
+    debug_mod.linkSystemLibrary("advapi32", .{});
+    const debug_exe = b.addExecutable(.{ .name = "pimon-agent-win11-ui-debug", .root_module = debug_mod });
+    const debug_step = b.step("win-ui-debug", "Win11 agent DVUI/DX11 diagnostic console build");
+    debug_step.dependOn(&b.addInstallArtifact(debug_exe, .{ .dest_sub_path = "pimon-agent-win11-ui-debug.exe" }).step);
 }
 
 /// DVUI's SDL2 backend + our dashboard.

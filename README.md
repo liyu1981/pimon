@@ -121,21 +121,23 @@ zig build pi2
 ./scripts/build-release.sh   # Pi 2/host ReleaseFast + agent ReleaseSafe → dist/release/
 ```
 
-`build-dev.sh` produces `pimon-sdl`, `pimon-fb`, and `pimon-agent-win11.exe`
-under `dist/dev/`.  `build-release.sh` also builds the ARMv7 binaries and
-produces `pimon-pi2-sdl`, `pimon-pi2-fb`, host release binaries, and the
-release Windows agent under `dist/release/`.
+`build-dev.sh` produces `pimon-sdl`, `pimon-fb`, `pimon-agent-win11.exe`, and
+the DVUI variant `pimon-agent-win11-ui.exe` under `dist/dev/`.
+`build-release.sh` also builds the ARMv7 binaries and produces
+`pimon-pi2-sdl`, `pimon-pi2-fb`, host release binaries, and both Windows agent
+variants under `dist/release/`.
 
 ### Windows 11 agent
 
 ```sh
-zig build win -Doptimize=ReleaseSafe   # → zig-out/bin/pimon-agent-win11.exe (x86_64-windows-gnu)
+zig build win -Doptimize=ReleaseSafe      # native Win32 controls
+zig build win-ui -Doptimize=ReleaseSafe   # DVUI + DX11 editor/log UI
 ```
 
 The agent is a Win32 tray application that samples Win11 CPU/RAM/network/GPU
-(PDH + DXGI, optional NVML) and pushes batches to pimon.  It starts hidden in
-the system tray; double-click the icon to see the live log, Start/Stop buttons,
-and an editable config panel.  On Windows you can also create/edit the config
+(PDH + DXGI, optional NVML) and pushes batches to pimon.  The window opens by
+default; `--hidden` starts it in the system tray.  Double-click the tray icon
+to see the live log, Start/Stop buttons, and an editable config panel.  On Windows you can also create/edit the config
 with:
 
 ```powershell

@@ -45,6 +45,12 @@ pub const LogBuffer = struct {
         self.log(text);
     }
 
+    pub fn totalCount(self: *LogBuffer) u64 {
+        self.mutex.lockUncancelable(self.io);
+        defer self.mutex.unlock(self.io);
+        return self.total;
+    }
+
     /// Snapshot all retained lines (oldest first) and return the total counter.
     pub fn snapshot(self: *LogBuffer, gpa: std.mem.Allocator, out: *std.ArrayList(u8)) u64 {
         self.mutex.lockUncancelable(self.io);
