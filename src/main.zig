@@ -25,6 +25,8 @@ const net = @import("net");
 
 var quit_requested = std.atomic.Value(bool).init(false);
 
+const VERSION = "0.1.0";
+
 fn onSignal(_: posix.SIG) callconv(.c) void {
     quit_requested.store(true, .seq_cst);
 }
@@ -351,6 +353,9 @@ const Config = struct {
                 self.no_http = true;
             } else if (std.mem.eql(u8, arg, "--gen-config")) {
                 self.gen_config = true;
+            } else if (std.mem.eql(u8, arg, "--version")) {
+                std.debug.print("pimon 0.1.0\n", .{});
+                std.process.exit(0);
             } else if (std.mem.eql(u8, arg, "-h") or std.mem.eql(u8, arg, "--help")) {
                 printUsage();
                 std.process.exit(0);

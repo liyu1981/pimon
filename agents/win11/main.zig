@@ -4,6 +4,8 @@
 //! config editor and log view are rendered with DVUI on top of D3D11.
 
 const std = @import("std");
+
+const VERSION = "0.1.0";
 const dvui = @import("dvui");
 const Backend = @import("dx11-backend");
 const c = @import("winapi");
@@ -133,7 +135,7 @@ pub fn main(init: std.process.Init) !void {
         .size = .{ .w = 1000.0, .h = 700.0 },
         .min_size = .{ .w = 760.0, .h = 520.0 },
         .vsync = true,
-        .title = "pimon-agent-win11",
+        .title = "pimon-agent-win11 " ++ VERSION,
         .dvui_window_init_options = .{
             .theme = dvui.Theme.builtin.adwaita_dark,
         },
@@ -197,7 +199,7 @@ fn uiFrame(win: *dvui.Window) !void {
         var header = dvui.box(@src(), .{ .dir = .horizontal }, .{ .expand = .horizontal });
         defer header.deinit();
 
-        dvui.labelNoFmt(@src(), "pimon-agent-win11", .{}, .{ .font = .theme(.title), .gravity_y = 0.5 });
+        dvui.labelNoFmt(@src(), "pimon-agent-win11 " ++ VERSION, .{}, .{ .font = .theme(.title), .gravity_y = 0.5 });
         const running = app.running.load(.acquire);
         dvui.labelNoFmt(@src(), if (running) "  Running" else "  Stopped", .{}, .{
             .gravity_y = 0.5,
