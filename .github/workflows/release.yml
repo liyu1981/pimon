@@ -50,6 +50,29 @@ jobs:
           cp -f zig-out/bin/pimon-agent-win11.exe "$OUT/"
           ls -lh "$OUT"
 
+      - name: Self-sign Windows agent (optional)
+        env:
+          SIGNING_PFX_BASE64: ${{ secrets.PIMON_CODESIGN_PFX_BASE64 }}
+          SIGNING_PFX_PASSWORD: ${{ secrets.PIMON_CODESIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+          if [ -z "${SIGNING_PFX_BASE64}" ]; then
+            echo "::notice::PIMON_CODESIGN_PFX_BASE64 not set - shipping an unsigned agent"
+            exit 0
+          fi
+          sudo apt-get install -y osslsigncode
+          mkdir -p dist/signing
+          printf '%s' "$SIGNING_PFX_BASE64" | base64 -d > dist/signing/pimon-codesign.pfx
+          osslsigncode sign \
+            -pkcs12 dist/signing/pimon-codesign.pfx -pass "$SIGNING_PFX_PASSWORD" \
+            -n "pimon Win11 agent" -i "https://github.com/liyu1981/pimon" \
+            -h sha256 -ts http://timestamp.digicert.com \
+            -in dist/release/pimon-agent-win11.exe \
+            -out dist/release/pimon-agent-win11.signed.exe
+          mv -f dist/release/pimon-agent-win11.signed.exe dist/release/pimon-agent-win11.exe
+          osslsigncode verify -in dist/release/pimon-agent-win11.exe
+          rm -rf dist/signing
+
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:

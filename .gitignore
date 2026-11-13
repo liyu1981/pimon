@@ -5,3 +5,8 @@ zig-out/
 !assets/pimon-win11.png
 *.fb
 dist/
+
+# Local self-signed code-signing material (scripts/selfsign-win11.*)
+*.pfx
+*.p12
+.signing/

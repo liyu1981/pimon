@@ -208,6 +208,11 @@ under `dist/release/`.
 zig build win -Doptimize=ReleaseSafe      # DVUI/DX11 tray UI
 ```
 
+Sign the result with a local self-signed certificate using
+`./scripts/selfsign-win11.sh` (Linux/macOS, `osslsigncode`) or
+`.\scripts\selfsign-win11.ps1` (Windows, `signtool`); see
+[Code signing](agents/win11/README.md#code-signing-self-signed).
+
 The agent is a Windows tray application that samples Win11 CPU/RAM/network/GPU
 (PDH + DXGI, optional NVML) and pushes batches to pimon.  The window opens by
 default; `--hidden` starts it in the system tray.  Double-click the tray icon
