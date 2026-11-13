@@ -304,12 +304,23 @@ fn makeUiModules(
     optimize: std.builtin.OptimizeMode,
     test_step: ?*std.Build.Step,
 ) UiModules {
+    // Universal typed data values (pure std, shared by layout/net/metrics).
+    const data_mod = b.createModule(.{
+        .root_source_file = b.path("src/data.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    addTests(b, data_mod, test_step);
+
     // Reusable drawing widgets: arc, gauge, sparkline, palette.
     const widgets_mod = b.createModule(.{
         .root_source_file = b.path("src/widgets.zig"),
         .target = target,
         .optimize = optimize,
-        .imports = &.{.{ .name = "dvui", .module = dvui_mod }},
+        .imports = &.{
+            .{ .name = "dvui", .module = dvui_mod },
+            .{ .name = "data", .module = data_mod },
+        },
     });
     addTests(b, widgets_mod, test_step);
 
@@ -318,16 +329,9 @@ fn makeUiModules(
         .root_source_file = b.path("src/metrics.zig"),
         .target = target,
         .optimize = optimize,
+        .imports = &.{.{ .name = "data", .module = data_mod }},
     });
     addTests(b, metrics_mod, test_step);
-
-    // Universal typed data values (pure std, shared by layout/net/metrics).
-    const data_mod = b.createModule(.{
-        .root_source_file = b.path("src/data.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    addTests(b, data_mod, test_step);
 
     // Optional HTTP/WebSocket control listener (pure std, no DVUI).
     const net_mod = b.createModule(.{

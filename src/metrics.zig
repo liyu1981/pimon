@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const posix = std.posix;
+const shared = @import("data");
 
 pub const SystemMetrics = struct {
     tick: u32 = 0,
@@ -29,6 +30,8 @@ pub const SystemMetrics = struct {
     net_iface: [16]u8 = @splat(0),
     net_rx_kbs: f32 = 0,
     net_tx_kbs: f32 = 0,
+    net_rx_bps: f32 = 0,
+    net_tx_bps: f32 = 0,
     net_rx_total: u64 = 0,
     net_tx_total: u64 = 0,
     net_prev_rx: u64 = 0,
@@ -189,12 +192,14 @@ pub const SystemMetrics = struct {
             totals.rx >= self.net_prev_rx and totals.tx >= self.net_prev_tx)
         {
             const secs = @as(f32, @floatFromInt(dt_ms)) / 1000.0;
-            self.net_rx_kbs = @as(f32, @floatFromInt(totals.rx - self.net_prev_rx)) / secs / 1024.0;
-            self.net_tx_kbs = @as(f32, @floatFromInt(totals.tx - self.net_prev_tx)) / secs / 1024.0;
+            self.net_rx_bps = @as(f32, @floatFromInt(totals.rx - self.net_prev_rx)) / secs;
+            self.net_tx_bps = @as(f32, @floatFromInt(totals.tx - self.net_prev_tx)) / secs;
         } else {
-            self.net_rx_kbs = 0;
-            self.net_tx_kbs = 0;
+            self.net_rx_bps = 0;
+            self.net_tx_bps = 0;
         }
+        self.net_rx_kbs = self.net_rx_bps / 1024.0;
+        self.net_tx_kbs = self.net_tx_bps / 1024.0;
 
         self.net_rx_total = totals.rx;
         self.net_tx_total = totals.tx;
@@ -202,10 +207,12 @@ pub const SystemMetrics = struct {
         self.net_prev_tx = totals.tx;
         self.net_prev_ms = now;
 
-        formatInto(&self.net_text, "{s}  down {d:.1} KiB/s  up {d:.1} KiB/s", .{
+        var rx_buf: [24]u8 = undefined;
+        var tx_buf: [24]u8 = undefined;
+        formatInto(&self.net_text, "{s}  down {s}  up {s}", .{
             std.mem.sliceTo(&self.net_iface, 0),
-            self.net_rx_kbs,
-            self.net_tx_kbs,
+            shared.formatRate(&rx_buf, self.net_rx_bps),
+            shared.formatRate(&tx_buf, self.net_tx_bps),
         });
         const rx_mib = @as(f64, @floatFromInt(self.net_rx_total)) / 1024.0 / 1024.0;
         const tx_mib = @as(f64, @floatFromInt(self.net_tx_total)) / 1024.0 / 1024.0;

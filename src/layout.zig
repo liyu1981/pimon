@@ -88,8 +88,12 @@ pub const Node = struct {
     /// Full scale (default 100).  The value arc turns yellow near 78% and red
     /// near 90%, matching the threshold markers drawn at the end of the sweep.
     max: ?f32 = null,
-    /// Unit shown under the value, e.g. "%", "°C", "W".
+    /// Unit shown under the value, e.g. "%", "°C", "W".  Ignored when
+    /// `format` is `.rate`.
     unit: ?[]const u8 = null,
+    /// Readout format.  `.rate` treats `value`/`bind_value` and `max` as
+    /// bytes per second and picks B/s, KiB/s, MiB/s or GiB/s automatically.
+    format: ?widgets.gauge.Format = null,
     /// Live scalar key (see `Bindings.setFloat`); wins over `value`.
     bind_value: ?[]const u8 = null,
     /// Draw the gauge's yellow/red warning bands (default off).
@@ -531,6 +535,7 @@ fn renderNode(node: *const Node, gpa: std.mem.Allocator, b: *Bindings, idx: usiz
             const gauge_opts: widgets.gauge.Options = .{
                 .value = if (node.bind_value) |k| b.getFloat(k) orelse node.value orelse 0.0 else node.value orelse 0.0,
                 .max = node.max orelse 100.0,
+                .format = node.format orelse .plain,
                 .accent = widgets.palette.parse(node.color) orelse widgets.palette.green,
                 .show_thresholds = node.show_thresholds orelse false,
             };
@@ -642,6 +647,7 @@ test "gauge and sparkline schema" {
         \\        .{ .component = .gauge, .bind_value = "cpu.temp", .max = 80.0, .unit = "C", .color = "green", .show_thresholds = true, .bind_type = .float },
         \\        .{ .component = .sparkline, .bind_data = "cpu.load_hist", .color = "cyan", .height = 48.0 },
         \\        .{ .component = .gauge, .value = 22.4, .max = 100.0, .unit = "%" },
+        \\        .{ .component = .gauge, .bind_value = "net.rx_bps", .max = 13107200.0, .format = .rate, .bind_type = .float },
         \\    },
         \\}
         ,
@@ -661,6 +667,9 @@ test "gauge and sparkline schema" {
     try std.testing.expect(kids[2].component == .gauge);
     try std.testing.expect(kids[2].bind_value == null);
     try std.testing.expectEqual(@as(f32, 22.4), kids[2].value.?);
+    try std.testing.expect(kids[3].component == .gauge);
+    try std.testing.expectEqualStrings("net.rx_bps", kids[3].bind_value.?);
+    try std.testing.expect(kids[3].format.? == .rate);
 }
 
 test "owned bindings copy keys and data" {

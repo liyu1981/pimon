@@ -161,6 +161,7 @@ pub fn frame(m: *metrics.SystemMetrics, c: *Controls, info: DisplayInfo) !dvui.A
 /// | `ram.used_mb` / `ram.total_mb` / `ram.used_pct` | memory usage |
 /// | `net.rx_kbs` / `net.tx_kbs` | default-interface throughput (KiB/s) |
 /// | `net.rx_mbs` / `net.tx_mbs` | default-interface throughput (MiB/s) |
+/// | `net.rx_bps` / `net.tx_bps` | default-interface throughput (bytes/s) |
 /// | `net.rx_total_mb` / `net.tx_total_mb` | bytes since boot (MiB) |
 /// | `cpu.load_hist` | series: last 48 one-second load samples |
 /// | `sys.host` / `sys.kernel` / `sys.cpu` / `sys.cpu_model` | text |
@@ -189,6 +190,8 @@ pub fn publishMetrics(gpa: std.mem.Allocator, b: *layout_mod.Bindings, m: *metri
     put(b, gpa, "net.tx_kbs", .{ .float = m.net_tx_kbs });
     put(b, gpa, "net.rx_mbs", .{ .float = m.net_rx_kbs / 1024.0 });
     put(b, gpa, "net.tx_mbs", .{ .float = m.net_tx_kbs / 1024.0 });
+    put(b, gpa, "net.rx_bps", .{ .float = m.net_rx_bps });
+    put(b, gpa, "net.tx_bps", .{ .float = m.net_tx_bps });
     put(b, gpa, "net.rx_total_mb", .{ .float = @as(f32, @floatFromInt(m.net_rx_total)) / 1024.0 / 1024.0 });
     put(b, gpa, "net.tx_total_mb", .{ .float = @as(f32, @floatFromInt(m.net_tx_total)) / 1024.0 / 1024.0 });
 

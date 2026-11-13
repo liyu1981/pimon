@@ -140,11 +140,14 @@ fn collectEntries(
     try add(entries, gpa, "win.cpu.util_pct", .{ .float = s.cpu_util_pct });
     try add(entries, gpa, "win.cpu.queue", .{ .float = s.cpu_queue });
     try add(entries, gpa, "win.cpu.util_hist", .{ .series = s.cpu_hist.slice() });
+    if (s.temp_available) try add(entries, gpa, "win.cpu.temp_c", .{ .float = s.temp_c });
     try add(entries, gpa, "win.ram.used_pct", .{ .float = s.memUsedPct() });
     try add(entries, gpa, "win.ram.used_mb", .{ .float = s.memUsedMb() });
     try add(entries, gpa, "win.ram.total_mb", .{ .float = s.memTotalMb() });
     try add(entries, gpa, "win.net.rx_mbs", .{ .float = s.net_rx_mbs });
     try add(entries, gpa, "win.net.tx_mbs", .{ .float = s.net_tx_mbs });
+    try add(entries, gpa, "win.net.rx_bps", .{ .float = s.net_rx_bps });
+    try add(entries, gpa, "win.net.tx_bps", .{ .float = s.net_tx_bps });
     try add(entries, gpa, "win.net.rx_total_mb", .{ .float = @as(f32, @floatFromInt(s.net_total_rx)) / 1024.0 / 1024.0 });
     try add(entries, gpa, "win.net.tx_total_mb", .{ .float = @as(f32, @floatFromInt(s.net_total_tx)) / 1024.0 / 1024.0 });
 

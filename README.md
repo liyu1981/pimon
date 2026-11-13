@@ -482,7 +482,8 @@ used by the Win11 clock), `children`.
 | `value` | static value |
 | `bind_value` | **live** scalar key (wins over `value`) |
 | `max` | full scale (default 100) |
-| `unit` | suffix under the value (`%`, `°C`, `W`) |
+| `unit` | suffix under the value (`%`, `°C`, `W`); ignored when `format = .rate` |
+| `format` | `.plain` (default) or `.rate`: `value`/`bind_value` and `max` are bytes/second and the readout picks B/s, KiB/s, MiB/s or GiB/s automatically |
 | `color` | accent colour: `green`/`lime`/`red`/`yellow`/`orange`/`cyan`/`blue`/`white`/`gray`, or hex `rrggbb`/`aarrggbb` |
 | `show_thresholds` | draw the yellow/red warning bands (default `false`) |
 | `text` | gauge title, drawn above the ring |
@@ -526,6 +527,7 @@ without any code change.  Everything below is `.float` except `cpu.load_hist`
 | `ram.used_mb` / `ram.total_mb` / `ram.used_pct` | memory usage |
 | `net.rx_kbs` / `net.tx_kbs` | default-interface throughput (KiB/s) |
 | `net.rx_mbs` / `net.tx_mbs` | default-interface throughput (MiB/s) |
+| `net.rx_bps` / `net.tx_bps` | default-interface throughput (bytes/s) |
 | `net.rx_total_mb` / `net.tx_total_mb` | bytes since boot (MiB) |
 | `cpu.load_hist` | series: last 48 one-second load samples |
 | `sys.host` / `sys.kernel` / `sys.cpu_model` / `sys.cpu` | text: hostname, kernel, CPU model, core count |
@@ -539,9 +541,10 @@ without any code change.  Everything below is `.float` except `cpu.load_hist`
 ```
 
 `layouts/win11-monitor.layout.zon` displays a Windows 11 machine fed by
-`agents/win11` (CPU, RAM, network, GPU utilisation/VRAM/temperature, histories,
-system information, plus a large colour-coded “Windows Time” date/time row
-under the GPU/network gauges).
+`agents/win11` (CPU, RAM, network, GPU utilisation/VRAM/temperature, CPU
+temperature when the ACPI thermal-zone counter exists, histories, system
+information, plus a large colour-coded “Windows Time” date/time row under the
+GPU/network gauges).
 See `agents/win11/README.md` for building and running the agent.
 
 `layouts/pi-monitor.layout.zon` is the full system monitor: CPU load, CPU

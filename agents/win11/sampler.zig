@@ -5,6 +5,7 @@
 
 const std = @import("std");
 const c = @import("winapi");
+const data = @import("data");
 const History = @import("history.zig").History;
 
 const PDH_MORE_DATA: c.PDH_STATUS = @bitCast(@as(u32, 0x800007D2));
@@ -20,6 +21,9 @@ pub const Sampler = struct {
     cpu_count: u32 = 0,
     cpu_hist: History = .{},
 
+    temp_c: f32 = 0,
+    temp_available: bool = false,
+
     mem_total_bytes: u64 = 0,
     mem_avail_bytes: u64 = 0,
 
@@ -31,6 +35,8 @@ pub const Sampler = struct {
     net_last_ms: u64 = 0,
     net_rx_mbs: f32 = 0,
     net_tx_mbs: f32 = 0,
+    net_rx_bps: f32 = 0,
+    net_tx_bps: f32 = 0,
 
     hostname: [64]u8 = @splat(0),
     os_name: [64]u8 = @splat(0),
@@ -50,6 +56,7 @@ pub const Sampler = struct {
     updated_second: [4]u8 = @splat(0),
 
     queue_counter: ?PdhScalar = null,
+    thermal: ?ThermalZones = null,
 
     pub fn init(gpa: std.mem.Allocator, environ: *const std.process.Environ.Map) Sampler {
         var self = Sampler{ .gpa = gpa };
@@ -62,15 +69,22 @@ pub const Sampler = struct {
         }
         self.readStaticInfo();
         self.queue_counter = PdhScalar.init(std.unicode.utf8ToUtf16LeStringLiteral("\\System\\Processor Queue Length"));
+        // Best-effort CPU temperature: the ACPI thermal-zone counter is the
+        // only temperature Windows exposes without a kernel driver.  It is
+        // often missing on desktops and may report a board zone rather than
+        // the CPU die; when absent `temp_available` stays false.
+        self.thermal = ThermalZones.init(std.unicode.utf8ToUtf16LeStringLiteral("\\Thermal Zone Information(*)\\Temperature"));
         return self;
     }
 
     pub fn deinit(self: *Sampler) void {
         if (self.queue_counter) |*q| q.deinit();
+        if (self.thermal) |*t| t.deinit();
     }
 
     pub fn sample(self: *Sampler) void {
         self.sampleCpu();
+        self.sampleTemperature();
         self.sampleMemory();
         self.sampleNetwork();
         self.sampleUptime();
@@ -127,6 +141,8 @@ pub const Sampler = struct {
         if (ifindex == 0) {
             copyInto(&self.net_name, "n/a");
             copyInto(&self.net_text, "no default interface");
+            self.net_rx_bps = 0;
+            self.net_tx_bps = 0;
             self.net_rx_mbs = 0;
             self.net_tx_mbs = 0;
             return;
@@ -158,6 +174,8 @@ pub const Sampler = struct {
             self.net_last_ms = now;
             self.net_rx_mbs = 0;
             self.net_tx_mbs = 0;
+            self.net_rx_bps = 0;
+            self.net_tx_bps = 0;
         }
 
         const drx: u32 = row.dwInOctets -% self.net_prev_rx;
@@ -168,8 +186,10 @@ pub const Sampler = struct {
         const dt_ms = now -| self.net_last_ms;
         if (dt_ms > 0) {
             const secs = @as(f32, @floatFromInt(dt_ms)) / 1000.0;
-            self.net_rx_mbs = @as(f32, @floatFromInt(drx)) / secs / 1024.0 / 1024.0;
-            self.net_tx_mbs = @as(f32, @floatFromInt(dtx)) / secs / 1024.0 / 1024.0;
+            self.net_rx_bps = @as(f32, @floatFromInt(drx)) / secs;
+            self.net_tx_bps = @as(f32, @floatFromInt(dtx)) / secs;
+            self.net_rx_mbs = self.net_rx_bps / 1024.0 / 1024.0;
+            self.net_tx_mbs = self.net_tx_bps / 1024.0 / 1024.0;
         }
         self.net_total_rx += drx;
         self.net_total_tx += dtx;
@@ -183,11 +203,19 @@ pub const Sampler = struct {
             wideToUtf8(&name, std.mem.sliceTo(&row.wszName, 0));
             copyInto(&self.net_name, std.mem.sliceTo(&name, 0));
         }
-        formatInto(&self.net_text, "{s}  down {d:.1} MiB/s  up {d:.1} MiB/s", .{
+        var rx_text: [24]u8 = undefined;
+        var tx_text: [24]u8 = undefined;
+        formatInto(&self.net_text, "{s}  down {s}  up {s}", .{
             std.mem.sliceTo(&self.net_name, 0),
-            self.net_rx_mbs,
-            self.net_tx_mbs,
+            data.formatRate(&rx_text, self.net_rx_bps),
+            data.formatRate(&tx_text, self.net_tx_bps),
         });
+    }
+
+    fn sampleTemperature(self: *Sampler) void {
+        const celsius = if (self.thermal) |*t| t.sample() else null;
+        self.temp_available = celsius != null;
+        if (celsius) |value| self.temp_c = value;
     }
 
     fn sampleUptime(self: *Sampler) void {
@@ -293,6 +321,73 @@ const PdhScalar = struct {
         return value.unnamed_0.doubleValue;
     }
 };
+
+/// All ACPI thermal zones in one PDH query.  `\Thermal Zone Information(*)
+/// \Temperature` reports Kelvin and is the only CPU-adjacent temperature
+/// available without a driver (or LibreHardwareMonitor).  Instances are often
+/// absent, so callers must treat `null` as "not available".
+const ThermalZones = struct {
+    query: c.PDH_HQUERY = null,
+    counter: c.PDH_HCOUNTER = null,
+
+    fn init(path: [*:0]const u16) ?ThermalZones {
+        var self = ThermalZones{};
+        if (c.PdhOpenQueryW(null, 0, &self.query) != 0) return null;
+        if (c.PdhAddEnglishCounterW(self.query, path, 0, &self.counter) != 0) {
+            _ = c.PdhCloseQuery(self.query);
+            return null;
+        }
+        // A successful first collect tells us the counter exists; an empty
+        // instance list still means "no zones", not an error.
+        _ = c.PdhCollectQueryData(self.query);
+        return self;
+    }
+
+    fn deinit(self: *ThermalZones) void {
+        _ = c.PdhCloseQuery(self.query);
+        self.* = undefined;
+    }
+
+    fn sample(self: *ThermalZones) ?f32 {
+        if (c.PdhCollectQueryData(self.query) != 0) return null;
+
+        var size: c.DWORD = 0;
+        var count: c.DWORD = 0;
+        var status = c.PdhGetFormattedCounterArrayW(self.counter, c.PDH_FMT_DOUBLE, &size, &count, null);
+        if (status != PDH_MORE_DATA or size == 0) return null;
+
+        const buf = std.heap.page_allocator.alignedAlloc(u8, .of(c.PDH_FMT_COUNTERVALUE_ITEM_W), size) catch return null;
+        defer std.heap.page_allocator.free(buf);
+        status = c.PdhGetFormattedCounterArrayW(
+            self.counter,
+            c.PDH_FMT_DOUBLE,
+            &size,
+            &count,
+            @ptrCast(@alignCast(buf.ptr)),
+        );
+        if (status != 0) return null;
+
+        const items: [*]c.PDH_FMT_COUNTERVALUE_ITEM_W = @ptrCast(@alignCast(buf.ptr));
+        var hottest: ?f32 = null;
+        for (items[0..count]) |item| {
+            if (item.FmtValue.CStatus != 0) continue;
+            const celsius = kelvinToCelsius(item.FmtValue.unnamed_0.doubleValue) orelse continue;
+            if (hottest == null or celsius > hottest.?) hottest = celsius;
+        }
+        return hottest;
+    }
+};
+
+/// Convert a thermal-zone reading to Celsius, tolerating providers that report
+/// tenths of Kelvin.  Values outside a plausible CPU range mean "not a CPU
+/// sensor" and are rejected.
+fn kelvinToCelsius(raw: f64) ?f32 {
+    if (raw <= 0) return null;
+    const kelvin = if (raw > 1000.0) raw / 10.0 else raw;
+    const celsius: f32 = @floatCast(kelvin - 273.15);
+    if (celsius < -40.0 or celsius > 150.0) return null;
+    return celsius;
+}
 
 fn defaultIfIndex(gpa: std.mem.Allocator) u32 {
     var size: c.ULONG = 0;

@@ -152,13 +152,19 @@ Floats:
 
 ```text
 win.cpu.util_pct        win.cpu.queue
+win.cpu.temp_c          (best-effort ACPI thermal zone; may be absent)
 win.ram.used_pct        win.ram.used_mb       win.ram.total_mb
 win.net.rx_mbs          win.net.tx_mbs
+win.net.rx_bps          win.net.tx_bps
 win.net.rx_total_mb     win.net.tx_total_mb
 win.gpu.util_pct        win.gpu.mem_pct
 win.gpu.mem_used_mb     win.gpu.mem_total_mb
 win.gpu.temp_c          win.gpu.power_w      (when the provider exposes them)
 ```
+
+`win.net.*_bps` are raw bytes/second for `format = .rate` gauges; the
+`*_mbs` keys stay for compatibility.  `win.sys.net` uses the same automatic
+B/s → KiB/s → MiB/s → GiB/s formatting.
 
 Series:
 
@@ -191,6 +197,21 @@ Boolean: `win.online`.
 AMD ADL/ADLX and LibreHardwareMonitor are not bundled in this version.  AMD
 utilisation/VRAM already work through PDH/DXGI; add ADL only if GPU temperature
 or power is needed on a specific AMD machine.
+
+## CPU temperature
+
+Windows has no universal CPU-die temperature API.  The agent samples
+`\Thermal Zone Information(*)\Temperature` through PDH and publishes
+`win.cpu.temp_c` when at least one ACPI thermal zone is present.  This is
+best-effort: many desktops expose no zone at all, and some laptops report a
+board/ambient zone rather than the CPU package.  If the key is missing, the
+gauge shows 0; there is no error.
+
+For an accurate reading on machines that lack it, run
+[LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
+and use its WMI provider — that integration is not built in yet.  Intel/AMD
+vendor tools are the other alternative; both need a privileged helper, which
+would grow the agent well beyond its current zero-driver design.
 
 Each upload uses a fresh HTTP connection.  After Windows sleep/hibernate the
 agent detects the elapsed-time gap, recreates its HTTP client, and retries a

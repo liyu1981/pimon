@@ -150,10 +150,13 @@ if [ ! -s "$CER" ]; then
 fi
 
 for exe in "${EXES[@]}"; do
-    # mktemp creates 0600 files: remember the exe's mode and restore it.
+    # osslsigncode refuses to write over an existing -out file, so sign into a
+    # fresh temp directory (mktemp files exist already) and restore the exe's
+    # mode when moving the result into place.
     mode="$(stat -c '%a' "$exe" 2>/dev/null || stat -f '%Lp' "$exe")"
-    out="$(mktemp "${exe}.signed.XXXXXX")"
-    trap 'rm -f "$out"' EXIT
+    tmpdir="$(mktemp -d)"
+    out="$tmpdir/$(basename "$exe")"
+    trap 'rm -rf "$tmpdir"' EXIT
     note "signing $exe"
     args=(sign -pkcs12 "$PFX" -pass "$PASSWORD"
         -n "pimon Win11 agent" -i "https://github.com/liyu1981/pimon"
@@ -162,6 +165,7 @@ for exe in "${EXES[@]}"; do
     osslsigncode "${args[@]}"
     mv -f "$out" "$exe"
     chmod "$mode" "$exe"
+    rm -rf "$tmpdir"
     trap - EXIT
 
     if [ "$VERIFY" -eq 1 ]; then

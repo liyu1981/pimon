@@ -51,10 +51,11 @@
                         .{
                             .component = .hbox,
                             .children = .{
+                                .{ .component = .gauge, .text = "CPU TEMP", .bind_value = "win.cpu.temp_c", .bind_type = .float, .max = 100.0, .unit = "°C", .color = "yellow", .width = 125.0, .height = 70.0 },
                                 .{ .component = .gauge, .text = "GPU VRAM", .bind_value = "win.gpu.mem_pct", .bind_type = .float, .max = 100.0, .unit = "%", .color = "orange", .width = 125.0, .height = 70.0 },
                                 .{ .component = .gauge, .text = "GPU TEMP", .bind_value = "win.gpu.temp_c", .bind_type = .float, .max = 100.0, .unit = "°C", .color = "red", .width = 125.0, .height = 70.0 },
-                                .{ .component = .gauge, .text = "NET DOWN", .bind_value = "win.net.rx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "green", .width = 125.0, .height = 70.0 },
-                                .{ .component = .gauge, .text = "NET UP", .bind_value = "win.net.tx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "blue", .width = 125.0, .height = 70.0 },
+                                .{ .component = .gauge, .text = "NET DOWN", .bind_value = "win.net.rx_bps", .bind_type = .float, .max = 13107200.0, .format = .rate, .color = "green", .width = 125.0, .height = 70.0 },
+                                .{ .component = .gauge, .text = "NET UP", .bind_value = "win.net.tx_bps", .bind_type = .float, .max = 13107200.0, .format = .rate, .color = "blue", .width = 125.0, .height = 70.0 },
                             },
                         },
                         .{ .component = .heading, .text = "Windows Time", .color = "gray" },

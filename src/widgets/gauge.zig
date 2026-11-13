@@ -10,12 +10,24 @@
 
 const std = @import("std");
 const dvui = @import("dvui");
+const data = @import("data");
 const arc = @import("arc.zig");
 const palette = @import("palette.zig");
+
+/// How the value/unit readout inside the ring is formatted.
+pub const Format = enum {
+    /// Plain number plus the layout's static `unit` string.
+    plain,
+    /// `value` (and the gauge `max`) are bytes per second; show an automatic
+    /// B/s, KiB/s, MiB/s or GiB/s readout instead of the static unit.
+    rate,
+};
 
 pub const Options = struct {
     value: f32 = 0,
     max: f32 = 100,
+    /// Readout format; `.rate` replaces `unit` with an adaptive rate suffix.
+    format: Format = .plain,
     /// Colour of the value arc while it is below both thresholds.
     accent: dvui.Color = palette.green,
     /// Sweep in degrees. 270 leaves a 90° gap at the bottom, like a dial.
@@ -128,14 +140,22 @@ pub fn cell(id_extra: usize, title: []const u8, o: Options, unit: []const u8, wi
     defer inner.deinit();
 
     var buf: [32]u8 = undefined;
-    dvui.labelNoFmt(@src(), formatValue(&buf, o.value), .{ .align_x = 0.5 }, .{
+    var readout_unit = unit;
+    const readout = switch (o.format) {
+        .plain => formatValue(&buf, o.value),
+        .rate => blk: {
+            readout_unit = data.scaleRate(o.value).unit;
+            break :blk data.formatRateValue(&buf, o.value);
+        },
+    };
+    dvui.labelNoFmt(@src(), readout, .{ .align_x = 0.5 }, .{
         .font = dvui.Font.theme(.title).larger(8),
         .color_text = .{ .color = valueColor(fraction(o), o) },
         .expand = .horizontal,
         .id_extra = id_extra,
     });
-    if (unit.len > 0) {
-        dvui.labelNoFmt(@src(), unit, .{ .align_x = 0.5 }, .{ .expand = .horizontal, .id_extra = id_extra });
+    if (readout_unit.len > 0) {
+        dvui.labelNoFmt(@src(), readout_unit, .{ .align_x = 0.5 }, .{ .expand = .horizontal, .id_extra = id_extra });
     }
 }
 
@@ -159,4 +179,5 @@ test "fraction clamps and thresholds" {
     var buf: [32]u8 = undefined;
     try std.testing.expectEqualStrings("49", formatValue(&buf, 49.0));
     try std.testing.expectEqualStrings("22.4", formatValue(&buf, 22.4));
+    try std.testing.expectEqualStrings("1.5 MiB/s", data.formatRate(&buf, 1.5 * 1024 * 1024));
 }
