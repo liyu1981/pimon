@@ -482,8 +482,8 @@ used by the Win11 clock), `children`.
 | `value` | static value |
 | `bind_value` | **live** scalar key (wins over `value`) |
 | `max` | full scale (default 100) |
-| `unit` | suffix under the value (`%`, `°C`, `W`); ignored when `format = .rate` |
-| `format` | `.plain` (default) or `.rate`: `value`/`bind_value` and `max` are bytes/second and the readout picks B/s, KiB/s, MiB/s or GiB/s automatically |
+| `unit` | suffix under the value (`%`, `°C`, `W`); `MiB/s` switches to an adaptive B/s → KiB/s → MiB/s → GiB/s readout |
+| `format` | `.plain` (default) or `.rate`: `value`/`bind_value` and `max` are raw bytes/second; `.rate` picks the adaptive unit explicitly |
 | `color` | accent colour: `green`/`lime`/`red`/`yellow`/`orange`/`cyan`/`blue`/`white`/`gray`, or hex `rrggbb`/`aarrggbb` |
 | `show_thresholds` | draw the yellow/red warning bands (default `false`) |
 | `text` | gauge title, drawn above the ring |

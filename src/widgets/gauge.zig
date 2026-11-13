@@ -16,7 +16,9 @@ const palette = @import("palette.zig");
 
 /// How the value/unit readout inside the ring is formatted.
 pub const Format = enum {
-    /// Plain number plus the layout's static `unit` string.
+    /// Plain number plus the layout's static `unit` string.  A `unit` of
+    /// `"MiB/s"` automatically uses the adaptive rate readout, so an existing
+    /// MiB/s throughput gauge becomes adaptive without changing the layout.
     plain,
     /// `value` (and the gauge `max`) are bytes per second; show an automatic
     /// B/s, KiB/s, MiB/s or GiB/s readout instead of the static unit.
@@ -142,7 +144,10 @@ pub fn cell(id_extra: usize, title: []const u8, o: Options, unit: []const u8, wi
     var buf: [32]u8 = undefined;
     var readout_unit = unit;
     const readout = switch (o.format) {
-        .plain => formatValue(&buf, o.value),
+        .plain => if (std.mem.eql(u8, unit, "MiB/s")) blk: {
+            readout_unit = data.scaleRateMibs(o.value).unit;
+            break :blk data.formatRateMibsValue(&buf, o.value);
+        } else formatValue(&buf, o.value),
         .rate => blk: {
             readout_unit = data.scaleRate(o.value).unit;
             break :blk data.formatRateValue(&buf, o.value);

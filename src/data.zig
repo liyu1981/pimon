@@ -64,6 +64,16 @@ pub fn formatRate(buf: []u8, bytes_per_sec: f32) []const u8 {
     return std.fmt.bufPrint(buf, "{s} {s}", .{ formatRateValue(&num_buf, bytes_per_sec), rate.unit }) catch "?";
 }
 
+/// Like `scaleRate`, for a throughput already expressed in MiB/s.
+pub fn scaleRateMibs(mibs: f32) Rate {
+    return scaleRate(mibs * 1024.0 * 1024.0);
+}
+
+/// Like `formatRateValue`, for a throughput already expressed in MiB/s.
+pub fn formatRateMibsValue(buf: []u8, mibs: f32) []const u8 {
+    return formatRateValue(buf, mibs * 1024.0 * 1024.0);
+}
+
 test "value kinds" {
     try std.testing.expectEqual(Kind.float, kindOf(.{ .float = 1.5 }));
     try std.testing.expectEqual(Kind.series, kindOf(.{ .series = &.{ 1, 2 } }));

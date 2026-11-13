@@ -88,11 +88,14 @@ pub const Node = struct {
     /// Full scale (default 100).  The value arc turns yellow near 78% and red
     /// near 90%, matching the threshold markers drawn at the end of the sweep.
     max: ?f32 = null,
-    /// Unit shown under the value, e.g. "%", "°C", "W".  Ignored when
+    /// Unit shown under the value, e.g. "%", "°C", "W".  A `"MiB/s"` unit
+    /// renders as an adaptive B/s/KiB/s/MiB/s/GiB/s readout.  Ignored when
     /// `format` is `.rate`.
     unit: ?[]const u8 = null,
     /// Readout format.  `.rate` treats `value`/`bind_value` and `max` as
     /// bytes per second and picks B/s, KiB/s, MiB/s or GiB/s automatically.
+    /// A plain gauge whose `unit` is `"MiB/s"` already adapts; use `.rate`
+    /// only when the bound value is raw bytes/second.
     format: ?widgets.gauge.Format = null,
     /// Live scalar key (see `Bindings.setFloat`); wins over `value`.
     bind_value: ?[]const u8 = null,
@@ -720,4 +723,37 @@ test "float and series bindings" {
     try std.testing.expect(!try b.publish(gpa, "typed.float", .{ .text = "nope" }));
     try std.testing.expect(b.getText("typed.float") == null);
     try std.testing.expectEqual(data.Kind.float, b.kindOf("typed.float").?);
+}
+
+test "shipped layouts parse" {
+    const names = [_][]const u8{ "dashboard", "pi-monitor", "win11-monitor" };
+    for (names) |name| {
+        const path = std.fmt.allocPrint(std.testing.allocator, "layouts/{s}.layout.zon", .{name}) catch unreachable;
+        defer std.testing.allocator.free(path);
+        const source = std.Io.Dir.cwd().readFileAllocOptions(
+            std.testing.io,
+            path,
+            std.testing.allocator,
+            .limited(1 << 20),
+            .@"1",
+            0,
+        ) catch |err| {
+            std.debug.print("{s}: cannot read: {s}\n", .{ path, @errorName(err) });
+            return err;
+        };
+        defer std.testing.allocator.free(source);
+
+        var arena: std.heap.ArenaAllocator = .init(std.testing.allocator);
+        defer arena.deinit();
+        var diag: std.zon.parse.Diagnostics = undefined;
+        _ = std.zon.parse.fromSlice(Node, .{
+            .gpa = arena.allocator(),
+            .arena = arena.allocator(),
+            .source = source,
+            .diagnostics = &diag,
+        }) catch |err| {
+            std.debug.print("{s}: {s}\n", .{ path, @errorName(err) });
+            return err;
+        };
+    }
 }

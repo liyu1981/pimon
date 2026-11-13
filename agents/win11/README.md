@@ -45,8 +45,9 @@ Both scripts:
 - create `dist/signing/pimon-codesign.{key,crt,pfx,cer}` plus `password.txt`
   on the first run and reuse them afterwards; `--renew` / `-Renew` makes a new
   certificate;
-- sign `zig-out/bin/pimon-agent-win11.exe` in place — pass extra paths to sign
-  other binaries (for example `dist/release/pimon-agent-win11.exe`);
+- sign `zig-out/bin/pimon-agent-win11.exe` in place, plus
+  `dist/release/pimon-agent-win11.exe` when that release copy exists — pass
+  extra paths to sign other binaries;
 - keep all key material under `dist/`, which is git-ignored.  Never commit the
   `.pfx` or `.key` files.
 
@@ -162,9 +163,11 @@ win.gpu.mem_used_mb     win.gpu.mem_total_mb
 win.gpu.temp_c          win.gpu.power_w      (when the provider exposes them)
 ```
 
-`win.net.*_bps` are raw bytes/second for `format = .rate` gauges; the
-`*_mbs` keys stay for compatibility.  `win.sys.net` uses the same automatic
-B/s → KiB/s → MiB/s → GiB/s formatting.
+`win.net.*_mbs` drive the NET DOWN/UP gauges; any gauge with `unit = "MiB/s"`
+uses the automatic B/s → KiB/s → MiB/s → GiB/s readout, so the same layout
+also works on older pimon binaries that only know `unit`.  `win.net.*_bps` are
+raw bytes/second for layouts that prefer `format = .rate`.  `win.sys.net` uses
+the automatic formatting too.
 
 Series:
 

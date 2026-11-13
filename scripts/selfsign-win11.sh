@@ -3,7 +3,7 @@
 # certificate (OpenSSL + osslsigncode).  Linux/macOS equivalent of
 # scripts/selfsign-win11.ps1.
 #
-#   ./scripts/selfsign-win11.sh                     # sign zig-out/bin/*.exe
+#   ./scripts/selfsign-win11.sh                     # sign zig-out + dist/release
 #   ./scripts/selfsign-win11.sh --renew             # new certificate first
 #   ./scripts/selfsign-win11.sh dist/release/*.exe  # sign other outputs
 #
@@ -39,7 +39,8 @@ usage() {
 usage: scripts/selfsign-win11.sh [options] [EXE...]
 
 Generate (once) a self-signed code-signing certificate and sign the Windows 11
-agent with it.  Default target: zig-out/bin/pimon-agent-win11.exe.
+agent with it.  Default target: zig-out/bin/pimon-agent-win11.exe plus
+dist/release/pimon-agent-win11.exe when that release copy exists.
 
 options:
   --cert-dir DIR     where key/crt/pfx/cer are kept (default: dist/signing)
@@ -83,6 +84,11 @@ fi
 
 if [ ${#EXES[@]} -eq 0 ]; then
     EXES=("zig-out/bin/pimon-agent-win11.exe")
+    # `scripts/build-release.sh` copies the agent to dist/release; sign that
+    # copy too when it is present so a release build is not left unsigned.
+    if [ -f "dist/release/pimon-agent-win11.exe" ]; then
+        EXES+=("dist/release/pimon-agent-win11.exe")
+    fi
 fi
 
 for exe in "${EXES[@]}"; do

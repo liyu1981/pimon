@@ -11,7 +11,7 @@
 // Keys used here:
 //   cpu.load1     cpu.util_pct  cpu.temp          (gauges)
 //   ram.used_pct                                  (gauge)
-//   net.rx_bps    net.tx_bps                      (gauges, auto B/s..GiB/s)
+//   net.rx_mbs    net.tx_mbs                      (gauges, auto B/s..GiB/s)
 //   cpu.load_hist                                 (sparkline)
 //   sys.host  sys.kernel  sys.cpu_model  sys.cpu
 //   sys.uptime  sys.load  sys.mem  sys.net_total  (text labels)
@@ -60,8 +60,8 @@
                         .{
                             .component = .hbox,
                             .children = .{
-                                .{ .component = .gauge, .text = "DOWN", .bind_value = "net.rx_bps", .bind_type = .float, .max = 13107200.0, .format = .rate, .color = "green", .width = 145.0, .height = 80.0 },
-                                .{ .component = .gauge, .text = "UP", .bind_value = "net.tx_bps", .bind_type = .float, .max = 13107200.0, .format = .rate, .color = "blue", .width = 145.0, .height = 80.0 },
+                                .{ .component = .gauge, .text = "DOWN", .bind_value = "net.rx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "green", .width = 145.0, .height = 80.0 },
+                                .{ .component = .gauge, .text = "UP", .bind_value = "net.tx_mbs", .bind_type = .float, .max = 12.5, .unit = "MiB/s", .color = "blue", .width = 145.0, .height = 80.0 },
                             },
                         },
                         .{ .component = .label, .bind_text = "sys.net_total", .bind_type = .text },

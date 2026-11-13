@@ -13,7 +13,7 @@
 
 .PARAMETER Exe
     Executable(s) to sign.  Defaults to every pimon-agent-win11*.exe under
-    zig-out\bin.
+    zig-out\bin and dist\release.
 
 .PARAMETER CertDir
     Where the PFX/CER/password file are kept.  Default: dist\signing.
@@ -104,10 +104,14 @@ function Get-CertPassword([string]$Dir, [string]$Supplied) {
 }
 
 if ($Exe.Count -eq 0) {
-    $Exe = @(Get-ChildItem -Path "zig-out\bin" -Filter "pimon-agent-win11*.exe" -File -ErrorAction SilentlyContinue |
-        ForEach-Object { $_.FullName })
+    $Exe = @(
+        Get-ChildItem -Path "zig-out\bin" -Filter "pimon-agent-win11*.exe" -File -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.FullName }
+        Get-ChildItem -Path "dist\release" -Filter "pimon-agent-win11*.exe" -File -ErrorAction SilentlyContinue |
+            ForEach-Object { $_.FullName }
+    )
     if ($Exe.Count -eq 0) {
-        throw "No pimon-agent-win11*.exe found under zig-out\bin - run 'zig build win -Doptimize=ReleaseSafe' first."
+        throw "No pimon-agent-win11*.exe found under zig-out\bin or dist\release - run 'zig build win -Doptimize=ReleaseSafe' first."
     }
 }
 foreach ($path in $Exe) {
