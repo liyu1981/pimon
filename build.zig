@@ -119,7 +119,7 @@ fn buildWin11(b: *std.Build, optimize: std.builtin.OptimizeMode, test_step: ?*st
     mod.linkSystemLibrary("advapi32", .{});
     mod.addWin32ResourceFile(.{
         .file = b.path("agents/win11/pimon-agent.rc"),
-        .include_paths = &.{b.path("assets")},
+        .include_paths = &.{ b.path("assets"), b.path("agents/win11") },
     });
 
     const exe = b.addExecutable(.{ .name = "pimon-agent-win11", .root_module = mod });
@@ -151,7 +151,7 @@ fn buildWin11(b: *std.Build, optimize: std.builtin.OptimizeMode, test_step: ?*st
     debug_mod.linkSystemLibrary("advapi32", .{});
     debug_mod.addWin32ResourceFile(.{
         .file = b.path("agents/win11/pimon-agent.rc"),
-        .include_paths = &.{b.path("assets")},
+        .include_paths = &.{ b.path("assets"), b.path("agents/win11") },
     });
     const debug_exe = b.addExecutable(.{ .name = "pimon-agent-win11-debug", .root_module = debug_mod });
     const debug_step = b.step("win-debug", "Win11 agent DVUI/DX11 diagnostic console build");

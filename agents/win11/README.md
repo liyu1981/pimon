@@ -10,13 +10,23 @@ the tray icon (or right-click → Open) to bring the window back.
 ## Build
 
 ```sh
+git submodule update --init --recursive
 zig build win -Doptimize=ReleaseSafe
 # → zig-out/bin/pimon-agent-win11.exe  (x86_64-windows-gnu)
 ```
 
+The PawnIO and PawnIO.Modules sources are tracked as submodules under
+`vendor/pawnio` and `vendor/pawnio-modules`.  The signed `.bin` modules used at
+runtime are vendored separately under `agents/win11/modules`; they cannot be
+built locally because PawnIO.sys only accepts author-signed modules.
+
 The UI uses DVUI's native DX11 backend and requires a usable D3D11 adapter
 (some RDP/VM sessions may not provide one).  It includes a multiline config
 editor, scrolling log view and themed controls.
+
+The executable manifest requests administrator privileges.  Windows shows a
+UAC prompt at launch; this is required for PawnIO device access.  Use Task
+Scheduler with "Run with highest privileges" for unattended startup.
 
 ## Code signing (self-signed)
 
@@ -128,10 +138,12 @@ Window controls:
 - **Start / Stop** — control the sampling worker.
 - **Save Config** — write the editor contents to `agent.config`.
 - **Reload** — discard edits and reload the file.
+- **Install PawnIO** — download, verify and run the official PawnIO
+  installer for AMD CPU temperature.
 - **Hide** — return to the tray.
 - **Exit** — stop the worker and quit.  Closing the window only hides it.
 
-The tray menu also has Open, Start, Stop and Exit.
+The tray menu also has Open, Start, Stop, Install PawnIO and Exit.
 
 Startup diagnostics are appended to `%TEMP%\pimon-agent-win11.log` (for example
 `C:\Users\<you>\AppData\Local\Temp\pimon-agent-win11.log`).  If the window
@@ -203,18 +215,37 @@ or power is needed on a specific AMD machine.
 
 ## CPU temperature
 
-Windows has no universal CPU-die temperature API.  The agent samples
-`\Thermal Zone Information(*)\Temperature` through PDH and publishes
-`win.cpu.temp_c` when at least one ACPI thermal zone is present.  This is
-best-effort: many desktops expose no zone at all, and some laptops report a
-board/ambient zone rather than the CPU package.  If the key is missing, the
-gauge shows 0; there is no error.
+Windows has no universal CPU-die temperature API.  The agent uses PawnIO as its
+primary source for AMD Ryzen package temperature:
 
-For an accurate reading on machines that lack it, run
-[LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor)
-and use its WMI provider — that integration is not built in yet.  Intel/AMD
-vendor tools are the other alternative; both need a privileged helper, which
-would grow the agent well beyond its current zero-driver design.
+- Use the **Install PawnIO** button in the window (or the tray menu).  The
+  agent downloads the official PawnIO 2.2.0 setup from
+  `github.com/namazso/PawnIO.Setup`, verifies the pinned SHA-256, and runs the
+  vendor installer after a confirmation prompt.
+- You can also install PawnIO manually from <https://pawnio.eu/> (64-bit only).
+- Run the agent elevated; its manifest requests administrator privileges.
+- The agent loads the signed `AMDFamily17.bin` module, reads SMN register
+  `0x00059800`, and publishes `win.cpu.temp_c`.
+- Tctl offsets for 1600X/1700X/1800X, Threadripper 19xx/29xx and 2700X are
+  applied so the reported value is the die temperature.
+- If PawnIO is missing, not running, or the agent is not elevated, the agent
+  falls back to `\Thermal Zone Information(*)\Temperature` through PDH.
+  That ACPI fallback is best-effort and often absent on AMD desktops.
+- If neither source works, `win.cpu.temp_c` is not published and the gauge
+  shows 0.
+
+The agent does not bundle the driver.  The installer URL, version and hash
+are pinned in `agents/win11/pawnio_install.zig`; update them deliberately when
+moving to a new PawnIO release.  The install prompt explains that PawnIO is a
+GPL-2.0 kernel driver, and the official installer remains responsible for
+upgrades and uninstall registration.
+
+The vendored signed modules and their LGPL notice are in
+`agents/win11/modules/`.  The diagnostic console build logs `pawnio:` lines
+for device-open, module-load, download, checksum, and elevation failures.
+
+Intel MSR support (and additional CCD/per-core sensors) can be added through
+the same backend later.
 
 Each upload uses a fresh HTTP connection.  After Windows sleep/hibernate the
 agent detects the elapsed-time gap, recreates its HTTP client, and retries a

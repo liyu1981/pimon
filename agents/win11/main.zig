@@ -12,6 +12,8 @@ const c = @import("winapi");
 const config = @import("config.zig");
 const worker = @import("worker.zig");
 const LogBuffer = @import("logbuf.zig").LogBuffer;
+const pawnio = @import("pawnio.zig");
+const pawnio_install = @import("pawnio_install.zig");
 
 const window_class = Backend.win32.L("PimonAgentWin11Dvui");
 const WM_TRAY: u32 = 0x8000 + 1;
@@ -20,6 +22,7 @@ const ID_OPEN: usize = 0xE001;
 const ID_START: usize = 0xE002;
 const ID_STOP: usize = 0xE003;
 const ID_EXIT: usize = 0xE004;
+const ID_INSTALL_PAWNIO: usize = 0xE005;
 
 const App = struct {
     io: std.Io,
@@ -38,6 +41,10 @@ const App = struct {
     worker_thread: ?std.Thread = null,
     stop: std.atomic.Value(bool) = .init(false),
     running: std.atomic.Value(bool) = .init(false),
+    install_thread: ?std.Thread = null,
+    install_running: std.atomic.Value(bool) = .init(false),
+    install_ok: std.atomic.Value(bool) = .init(false),
+    restart_pending: bool = false,
     quit: bool = false,
     show_requested: bool = false,
 
@@ -151,6 +158,7 @@ pub fn main(init: std.process.Init) !void {
 
     defer removeTrayIcon();
     defer shutdownWorker();
+    defer shutdownPawnIoInstall();
     defer {
         app.config_text.deinit(app.gpa);
         app.log_text.deinit(app.gpa);
@@ -169,6 +177,7 @@ pub fn main(init: std.process.Init) !void {
 
     uiLog("entering DVUI loop\n");
     main_loop: while (!app.quit) {
+        installMaintenance();
         const result = Backend.serviceMessageQueue();
         if (app.quit) break;
         switch (result) {
@@ -217,6 +226,9 @@ fn uiFrame(win: *dvui.Window) !void {
         }
         if (dvui.button(@src(), "Reload", .{}, .{ .id_extra = 4 })) {
             loadConfigText();
+        }
+        if (dvui.button(@src(), "Install PawnIO", .{}, .{ .id_extra = 6 })) {
+            startPawnIoInstall();
         }
         if (dvui.button(@src(), "Hide", .{}, .{ .id_extra = 5 })) {
             hideWindow();
@@ -320,6 +332,7 @@ fn configFromText() ?config.Config {
 }
 
 fn startFromConfig(save: bool) bool {
+    app.restart_pending = false;
     if (app.running.load(.acquire)) {
         app.log.log("already running");
         return true;
@@ -454,6 +467,11 @@ fn mainWndProc(
                     stopWorker();
                     return 0;
                 },
+                ID_INSTALL_PAWNIO => {
+                    uiLogf("tray command {d}\n", .{id});
+                    startPawnIoInstall();
+                    return 0;
+                },
                 ID_EXIT => {
                     uiLogf("tray command {d}\n", .{id});
                     app.quit = true;
@@ -512,6 +530,7 @@ fn showTrayMenu() void {
     _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_STRING, ID_START, Backend.win32.L("Start"));
     _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_STRING, ID_STOP, Backend.win32.L("Stop"));
     _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_SEPARATOR, 0, null);
+    _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_STRING, ID_INSTALL_PAWNIO, Backend.win32.L("Install PawnIO"));
     _ = Backend.win32.AppendMenuW(menu, Backend.win32.MF_STRING, ID_EXIT, Backend.win32.L("Exit"));
     var pt: Backend.win32.POINT = undefined;
     _ = Backend.win32.GetCursorPos(&pt);
@@ -526,6 +545,88 @@ fn showTrayMenu() void {
         null,
     );
     _ = Backend.win32.PostMessageW(hwnd, Backend.win32.WM_NULL, 0, 0);
+}
+
+const pawnio_install_prompt =
+    "Install PawnIO 2.2.0?\n\n" ++
+    "This downloads the official installer from\n" ++
+    "github.com/namazso/PawnIO.Setup, verifies the pinned SHA-256, and\n" ++
+    "runs the vendor installer.  It is a GPL-2.0 kernel driver used only to\n" ++
+    "read AMD Ryzen CPU temperature.\n\n" ++
+    "Continue?";
+
+fn startPawnIoInstall() void {
+    if (app.install_running.load(.acquire) or app.install_thread != null) {
+        app.log.log("pawnio: install already running");
+        return;
+    }
+    if (pawnio.isDeviceAvailable()) {
+        app.log.log("pawnio: device already available");
+        return;
+    }
+    if (!messageBoxConfirm("Install PawnIO", pawnio_install_prompt)) {
+        app.log.log("pawnio: install cancelled");
+        return;
+    }
+
+    const temp_dir = app.environ.get("TEMP") orelse ".";
+    app.install_ok.store(false, .release);
+    app.install_running.store(true, .release);
+    app.install_thread = std.Thread.spawn(.{ .stack_size = 512 * 1024 }, pawnioInstallThread, .{temp_dir}) catch |err| {
+        app.install_thread = null;
+        app.install_running.store(false, .release);
+        app.log.logf("pawnio: cannot start install thread ({s})", .{@errorName(err)});
+        return;
+    };
+    app.log.log("pawnio: installer download started");
+}
+
+fn pawnioInstallThread(temp_dir: []const u8) void {
+    const ok = pawnio_install.run(app.io, app.gpa, temp_dir, &app.log);
+    app.install_ok.store(ok, .release);
+    app.install_running.store(false, .release);
+}
+
+fn installMaintenance() void {
+    if (app.install_thread) |thread| {
+        if (!app.install_running.load(.acquire)) {
+            thread.join();
+            app.install_thread = null;
+            if (app.install_ok.swap(false, .acquire)) {
+                app.log.log("pawnio: restarting sampler to enable CPU temperature");
+                if (app.running.load(.acquire)) {
+                    stopWorker();
+                    app.restart_pending = true;
+                } else {
+                    app.log.log("pawnio: ready; press Start when needed");
+                }
+            }
+        }
+    }
+
+    if (app.restart_pending and !app.running.load(.acquire)) {
+        app.restart_pending = false;
+        _ = startFromConfig(false);
+    }
+}
+
+fn shutdownPawnIoInstall() void {
+    if (app.install_thread) |thread| {
+        if (app.install_running.load(.acquire)) {
+            thread.detach();
+        } else {
+            thread.join();
+        }
+        app.install_thread = null;
+    }
+}
+
+fn messageBoxConfirm(title: []const u8, text: []const u8) bool {
+    const title_w = std.unicode.utf8ToUtf16LeAllocZ(app.gpa, title) catch return false;
+    defer app.gpa.free(title_w);
+    const text_w = std.unicode.utf8ToUtf16LeAllocZ(app.gpa, text) catch return false;
+    defer app.gpa.free(text_w);
+    return c.MessageBoxW(null, text_w.ptr, title_w.ptr, c.MB_OKCANCEL | c.MB_ICONWARNING) == c.IDOK;
 }
 
 fn installConfig() void {

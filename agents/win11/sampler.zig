@@ -7,6 +7,7 @@ const std = @import("std");
 const c = @import("winapi");
 const data = @import("data");
 const History = @import("history.zig").History;
+const PawnIo = @import("pawnio.zig").PawnIo;
 
 const PDH_MORE_DATA: c.PDH_STATUS = @bitCast(@as(u32, 0x800007D2));
 
@@ -57,6 +58,7 @@ pub const Sampler = struct {
 
     queue_counter: ?PdhScalar = null,
     thermal: ?ThermalZones = null,
+    pawnio: ?PawnIo = null,
 
     pub fn init(gpa: std.mem.Allocator, environ: *const std.process.Environ.Map) Sampler {
         var self = Sampler{ .gpa = gpa };
@@ -74,12 +76,17 @@ pub const Sampler = struct {
         // often missing on desktops and may report a board zone rather than
         // the CPU die; when absent `temp_available` stays false.
         self.thermal = ThermalZones.init(std.unicode.utf8ToUtf16LeStringLiteral("\\Thermal Zone Information(*)\\Temperature"));
+        // Preferred source: PawnIO + the signed AMDFamily17 module.  This
+        // requires the agent to be elevated; otherwise init() returns null
+        // and the PDH thermal-zone path above remains the fallback.
+        self.pawnio = PawnIo.init(std.mem.sliceTo(&self.cpu_model, 0));
         return self;
     }
 
     pub fn deinit(self: *Sampler) void {
         if (self.queue_counter) |*q| q.deinit();
         if (self.thermal) |*t| t.deinit();
+        if (self.pawnio) |*p| p.deinit();
     }
 
     pub fn sample(self: *Sampler) void {
@@ -213,6 +220,14 @@ pub const Sampler = struct {
     }
 
     fn sampleTemperature(self: *Sampler) void {
+        if (self.pawnio) |*p| {
+            if (p.readCpuTemp()) |value| {
+                self.temp_c = value;
+                self.temp_available = true;
+                return;
+            }
+        }
+
         const celsius = if (self.thermal) |*t| t.sample() else null;
         self.temp_available = celsius != null;
         if (celsius) |value| self.temp_c = value;

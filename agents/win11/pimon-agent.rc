@@ -1,2 +1,3 @@
 #define IDI_PIMON 1
 IDI_PIMON ICON "pimon-win11.ico"
+1 24 "pimon-agent.manifest"

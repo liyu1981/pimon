@@ -6,4 +6,5 @@ test {
     _ = @import("config.zig");
     _ = @import("history.zig");
     _ = @import("client.zig");
+    _ = @import("cpu_temp.zig");
 }

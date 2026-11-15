@@ -43,6 +43,14 @@ recompiling.
 
 ## Quick start
 
+This repository tracks PawnIO and its signed-module sources as submodules.  Use
+`git clone --recurse-submodules ...`, or initialise them in an existing
+checkout with:
+
+```sh
+git submodule update --init --recursive
+```
+
 On the Pi (GPU console):
 
 ```sh
@@ -214,10 +222,14 @@ Sign the result with a local self-signed certificate using
 [Code signing](agents/win11/README.md#code-signing-self-signed).
 
 The agent is a Windows tray application that samples Win11 CPU/RAM/network/GPU
-(PDH + DXGI, optional NVML) and pushes batches to pimon.  The window opens by
-default; `--hidden` starts it in the system tray.  Double-click the tray icon
-to see the live log, Start/Stop buttons, and an editable config panel.  On
-Windows you can also create/edit the config with:
+(PDH + DXGI, optional NVML, PawnIO for AMD CPU temperature) and pushes batches
+to pimon.  Its manifest requests administrator privileges so it can open the
+PawnIO device; Windows shows a UAC prompt.  The window has an **Install
+PawnIO** action that downloads the official installer, verifies a pinned
+SHA-256, and runs it after confirmation; it never bundles or silently installs
+the driver.  The window opens by default; `--hidden` starts it in the system
+tray.  Double-click the tray icon to see the live log, Start/Stop buttons, and
+an editable config panel.  On Windows you can also create/edit the config with:
 
 ```powershell
 .\pimon-agent-win11.exe install-config

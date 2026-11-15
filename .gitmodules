@@ -1,0 +1,8 @@
+[submodule "vendor/pawnio"]
+	path = vendor/pawnio
+	url = https://github.com/namazso/PawnIO.git
+	branch = master
+[submodule "vendor/pawnio-modules"]
+	path = vendor/pawnio-modules
+	url = https://github.com/namazso/PawnIO.Modules.git
+	branch = main
