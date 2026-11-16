@@ -1,6 +1,6 @@
 .{
     .name = .pimon,
-    .version = "0.1.0",
+    .version = "0.1.1",
     .fingerprint = 0x71becc1fb2407d5a, // Changing this has security and trust implications.
     .minimum_zig_version = "0.17.0",
     .dependencies = .{

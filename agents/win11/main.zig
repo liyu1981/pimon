@@ -5,7 +5,7 @@
 
 const std = @import("std");
 
-const VERSION = "0.1.0";
+const VERSION = "0.1.1";
 const dvui = @import("dvui");
 const Backend = @import("dx11-backend");
 const c = @import("winapi");
