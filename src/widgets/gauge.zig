@@ -7,6 +7,8 @@
 //!
 //! This module only draws into a `RectScale` it is handed; putting a value and
 //! unit inside the ring with DVUI labels is left to the caller (`layout.zig`).
+//! The ring uses the accent/threshold colour; the centred value stays in the
+//! theme foreground colour so small gauges remain readable.
 
 const std = @import("std");
 const dvui = @import("dvui");
@@ -153,14 +155,20 @@ pub fn cell(id_extra: usize, title: []const u8, o: Options, unit: []const u8, wi
             break :blk data.formatRateValue(&buf, o.value);
         },
     };
+    // Keep the readout in the theme's text colour.  The ring already carries
+    // the accent/threshold colour; matching them here reduces contrast on the
+    // small gauges used by the Win11 monitor.
     dvui.labelNoFmt(@src(), readout, .{ .align_x = 0.5 }, .{
         .font = dvui.Font.theme(.title).larger(8),
-        .color_text = .{ .color = valueColor(fraction(o), o) },
         .expand = .horizontal,
         .id_extra = id_extra,
     });
     if (readout_unit.len > 0) {
-        dvui.labelNoFmt(@src(), readout_unit, .{ .align_x = 0.5 }, .{ .expand = .horizontal, .id_extra = id_extra });
+        dvui.labelNoFmt(@src(), readout_unit, .{ .align_x = 0.5 }, .{
+            .color_text = .{ .color = palette.gray },
+            .expand = .horizontal,
+            .id_extra = id_extra,
+        });
     }
 }
 

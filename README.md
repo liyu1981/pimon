@@ -502,7 +502,9 @@ used by the Win11 clock), `children`.
 
 The value arc turns **yellow near 78 %** and **red near 90 %** of `max`.  The
 warning/danger bands on the track are optional and **off by default**; set
-`.show_thresholds = true` on a gauge that wants them.
+`.show_thresholds = true` on a gauge that wants them.  The centred value uses
+the theme foreground colour, while the ring carries the accent/threshold
+colour, so compact gauges stay readable.
 
 ### `sparkline`
 
