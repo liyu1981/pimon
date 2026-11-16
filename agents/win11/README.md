@@ -236,9 +236,12 @@ primary source for AMD Ryzen package temperature:
 
 The agent does not bundle the driver.  The installer URL, version and hash
 are pinned in `agents/win11/pawnio_install.zig`; update them deliberately when
-moving to a new PawnIO release.  The install prompt explains that PawnIO is a
-GPL-2.0 kernel driver, and the official installer remains responsible for
-upgrades and uninstall registration.
+moving to a new PawnIO release.  The download goes to
+`%TEMP%\pimon-pawnio-setup-2.2.0.exe`; it is deleted after a successful run,
+but kept on a launch failure for inspection.  The log reports the path and the
+Win32 error if Windows refuses to start the installer.  The install prompt
+explains that PawnIO is a GPL-2.0 kernel driver, and the official installer
+remains responsible for upgrades and uninstall registration.
 
 The vendored signed modules and their LGPL notice are in
 `agents/win11/modules/`.  The diagnostic console build logs `pawnio:` lines

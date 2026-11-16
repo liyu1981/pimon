@@ -49,24 +49,41 @@ pub fn run(io: std.Io, gpa: std.mem.Allocator, temp_dir: []const u8, log: *LogBu
         return false;
     };
     defer gpa.free(path);
-    defer std.Io.Dir.cwd().deleteFile(io, path) catch {};
+    var keep_installer = false;
+    defer if (!keep_installer) std.Io.Dir.cwd().deleteFile(io, path) catch {};
 
-    const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch |err| {
-        log.logf("pawnio: cannot create installer file ({s})", .{@errorName(err)});
-        return false;
-    };
-    defer file.close(io);
-    file.writeStreamingAll(io, body) catch |err| {
-        log.logf("pawnio: cannot write installer ({s})", .{@errorName(err)});
-        return false;
-    };
+    {
+        const file = std.Io.Dir.cwd().createFile(io, path, .{}) catch |err| {
+            log.logf("pawnio: cannot create installer file ({s})", .{@errorName(err)});
+            return false;
+        };
+        defer file.close(io);
+        file.writeStreamingAll(io, body) catch |err| {
+            log.logf("pawnio: cannot write installer ({s})", .{@errorName(err)});
+            return false;
+        };
+    }
 
+    log.logf("pawnio: installer saved to {s}", .{path});
     log.logf("pawnio: running official installer ({d} bytes)", .{body.len});
-    if (!runInstaller(gpa, path)) {
-        log.log("pawnio: installer failed to start");
+    var launch_error: u32 = 0;
+    if (!runInstaller(gpa, path, &launch_error)) {
+        if (launch_error == 740) {
+            log.log("pawnio: elevation required; retrying installer with runas");
+            if (runInstallerElevated(gpa, path, &launch_error)) {
+                log.log("pawnio: installer exited");
+                return waitForDevice(io, log);
+            }
+        }
+        keep_installer = true;
+        log.logf("pawnio: installer failed to start (Win32 error {d}); kept at {s}", .{ launch_error, path });
         return false;
     }
 
+    return waitForDevice(io, log);
+}
+
+fn waitForDevice(io: std.Io, log: *LogBuffer) bool {
     var attempt: usize = 0;
     while (attempt < device_wait_attempts) : (attempt += 1) {
         if (pawnio.isDeviceAvailable()) {
@@ -97,14 +114,44 @@ fn download(io: std.Io, gpa: std.mem.Allocator, uri_text: []const u8) ![]u8 {
     return try response.reader(&read_buf).allocRemaining(gpa, .limited(max_download));
 }
 
-fn runInstaller(gpa: std.mem.Allocator, path: []const u8) bool {
+fn runInstallerElevated(gpa: std.mem.Allocator, path: []const u8, launch_error: *u32) bool {
     const path_w = std.unicode.utf8ToUtf16LeAllocZ(gpa, path) catch return false;
     defer gpa.free(path_w);
+
+    var sei: c.SHELLEXECUTEINFOW = std.mem.zeroes(c.SHELLEXECUTEINFOW);
+    sei.cbSize = @sizeOf(c.SHELLEXECUTEINFOW);
+    sei.fMask = @intCast(c.SEE_MASK_NOCLOSEPROCESS);
+    sei.lpVerb = std.unicode.utf8ToUtf16LeStringLiteral("runas");
+    sei.lpFile = path_w.ptr;
+    sei.nShow = c.SW_SHOWNORMAL;
+    if (c.ShellExecuteExW(&sei) == 0) {
+        launch_error.* = c.GetLastError();
+        return false;
+    }
+
+    if (sei.hProcess != null) {
+        defer _ = c.CloseHandle(sei.hProcess);
+        _ = c.WaitForSingleObject(sei.hProcess, c.INFINITE);
+    }
+    return true;
+}
+
+fn runInstaller(gpa: std.mem.Allocator, path: []const u8, launch_error: *u32) bool {
+    const path_w = std.unicode.utf8ToUtf16LeAllocZ(gpa, path) catch return false;
+    defer gpa.free(path_w);
+
+    const command = std.fmt.allocPrint(gpa, "\"{s}\"", .{path}) catch return false;
+    defer gpa.free(command);
+    const command_w = std.unicode.utf8ToUtf16LeAllocZ(gpa, command) catch return false;
+    defer gpa.free(command_w);
 
     var si: c.STARTUPINFOW = std.mem.zeroes(c.STARTUPINFOW);
     si.cb = @sizeOf(c.STARTUPINFOW);
     var pi: c.PROCESS_INFORMATION = std.mem.zeroes(c.PROCESS_INFORMATION);
-    if (c.CreateProcessW(path_w.ptr, null, null, null, 0, 0, null, null, &si, &pi) == 0) return false;
+    if (c.CreateProcessW(path_w.ptr, command_w.ptr, null, null, 0, 0, null, null, &si, &pi) == 0) {
+        launch_error.* = c.GetLastError();
+        return false;
+    }
 
     defer {
         _ = c.CloseHandle(pi.hProcess);
