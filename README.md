@@ -219,7 +219,11 @@ zig build win -Doptimize=ReleaseSafe      # DVUI/DX11 tray UI
 Sign the result with a local self-signed certificate using
 `./scripts/selfsign-win11.sh` (Linux/macOS, `osslsigncode`) or
 `.\scripts\selfsign-win11.ps1` (Windows, `signtool`); see
-[Code signing](agents/win11/README.md#code-signing-self-signed).
+[Code signing](agents/win11/README.md#code-signing).  Self-signing only fixes
+the publisher name on machines that trust the certificate: Windows 11 Smart App
+Control blocks locally built binaries of any signing level, so on a machine
+with SAC enforcing turn it off (one-way) before the agent can start — see
+[Smart App Control](agents/win11/README.md#smart-app-control-blocks-private-signing).
 
 The agent is a Windows tray application that samples Win11 CPU/RAM/network/GPU
 (PDH + DXGI, optional NVML, PawnIO for AMD CPU temperature) and pushes batches

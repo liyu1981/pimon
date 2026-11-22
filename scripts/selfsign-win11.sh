@@ -10,7 +10,9 @@
 # The certificate, key and PFX live in dist/signing/ (git-ignored).  Keep the
 # key private and install dist/signing/pimon-codesign.cer into
 # "Trusted Root Certification Authorities" on the Windows machines that should
-# trust the signature.
+# trust the signature.  This does not get past Smart App Control, which blocks
+# locally built binaries regardless of certificate trust - disable SAC on
+# those machines (see the note printed at the end).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 umask 077
@@ -195,5 +197,11 @@ To trust this certificate on a Windows machine, run in an elevated PowerShell:
   Import-Certificate -FilePath "$CER" -CertStoreLocation Cert:\\LocalMachine\\TrustedPublisher
 
 Self-signed signatures only satisfy Windows on machines that trust the
-certificate; other people still get "Unknown publisher" / SmartScreen prompts.
+certificate, and they do not satisfy Smart App Control: SAC blocks locally
+built binaries whatever their signing level.  Its check is per file hash
+against Microsoft's reputation service, so importing the certificate, or
+running Unblock-File, does not help.  The only fix on an affected machine is
+to turn SAC off (Windows Security > App & browser control > Smart App
+Control > Off).  Turning SAC off is permanent; re-enabling SAC needs
+a Windows reset.
 EOF

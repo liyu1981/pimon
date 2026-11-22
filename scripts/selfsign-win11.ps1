@@ -38,7 +38,9 @@
 .PARAMETER Trust
     Import the certificate into LocalMachine\Root and LocalMachine\
     TrustedPublisher (requires an elevated shell) so Windows stops warning
-    about the publisher on this machine.
+    about the publisher on this machine.  This does not satisfy Smart App
+    Control: if SAC is enforcing it blocks the exe at load time whatever the
+    certificate says, and the only fix is to turn SAC off.
 
 .PARAMETER NoVerify
     Skip the Get-AuthenticodeSignature check after signing.
@@ -199,6 +201,16 @@ foreach ($path in $Exe) {
     }
 }
 
+# Smart App Control ignores certificate trust and blocks never-seen binaries at
+# load time, so warn now instead of letting the user chase a trust problem.
+$sacState = (Get-ItemProperty -Path 'HKLM:\SYSTEM\CurrentControlSet\Control\CI\Policy' `
+        -Name VerifiedAndReputablePolicyState -ErrorAction SilentlyContinue).VerifiedAndReputablePolicyState
+if ($null -ne $sacState -and $sacState -ne 0) {
+    $label = if ($sacState -eq 1) { "enforcing" } else { "in evaluation mode" }
+    Write-Host "    warning: Smart App Control is $label - it blocks this exe regardless of the signature." -ForegroundColor Yellow
+    Write-Host "    turn it off via Windows Security > App & browser control > Smart App Control." -ForegroundColor Yellow
+}
+
 Write-Note "done"
 Write-Host "certificate: $cer"
 $cerCert = [System.Security.Cryptography.X509Certificates.X509Certificate2]::new($cer)
@@ -212,5 +224,11 @@ PowerShell there:
   Import-Certificate -FilePath "$cer" -CertStoreLocation Cert:\LocalMachine\TrustedPublisher
 
 Self-signed signatures only satisfy Windows on machines that trust the
-certificate; other people still get "Unknown publisher" / SmartScreen prompts.
+certificate, and they do not satisfy Smart App Control: SAC blocks locally
+built binaries whatever their signing level.  Its check is per file hash
+against Microsoft's reputation service, so importing the certificate, or
+running Unblock-File, does not help.  The only fix on an affected machine is
+to turn SAC off (Windows Security > App & browser control > Smart App
+Control > Off).  Turning SAC off is permanent; re-enabling it needs a Windows
+reset.
 "@
